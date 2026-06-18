@@ -1,0 +1,13 @@
+# Vercel
+.vercel
+
+# Azure Functions
+azure_api/.python_packages
+azure_api/bin
+azure_api/obj
+azure_api/local.settings.json
+__pycache__/
+*.pyc
+
+# Node (if vercel CLI pulls anything)
+node_modules

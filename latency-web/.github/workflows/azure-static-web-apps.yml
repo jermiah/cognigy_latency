@@ -1,0 +1,32 @@
+# Azure Static Web Apps deployment.
+# Set the secret AZURE_STATIC_WEB_APPS_API_TOKEN in your repo (Settings →
+# Secrets → Actions). Get the token from the Azure portal when you create the
+# Static Web App. Adjust `app_location`/`api_location` if you move this folder.
+name: Azure Static Web Apps CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Build And Deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          # Paths are relative to the repo root. This app lives in a subfolder:
+          app_location: "cognigy-tools-/latency-web"
+          api_location: "cognigy-tools-/latency-web/azure_api"
+          output_location: ""
