@@ -1,0 +1,8 @@
+# Keep Vercel focused on the static frontend + the /api Python function.
+# The Azure backend defines an `app` variable that Vercel's Python entrypoint
+# detector would treat as a second candidate, breaking the build. Exclude it
+# (and other non-Vercel files) so only api/latency.py is detected.
+azure_api/
+.github/
+staticwebapp.config.json
+README.md
