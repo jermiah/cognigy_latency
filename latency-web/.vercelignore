@@ -1,7 +1,7 @@
-# Keep Vercel focused on the static frontend + the /api Python function.
-# The Azure backend defines an `app` variable that Vercel's Python entrypoint
-# detector would treat as a second candidate, breaking the build. Exclude it
-# (and other non-Vercel files) so only api/latency.py is detected.
+# Keep Vercel focused on the Flask app (app.py) + frontend + shared core.
+# The Azure backend also defines an `app` variable, which would give Vercel's
+# Python entrypoint detector a second candidate. Exclude it and other
+# non-Vercel files so app.py is the single, unambiguous entrypoint.
 azure_api/
 .github/
 staticwebapp.config.json

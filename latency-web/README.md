@@ -29,35 +29,42 @@ time — those happen in the voice gateway, outside Cognigy's logs.
 ## How it works
 
 ```
-Browser (index.html)  ──POST /api/latency──▶  Serverless function  ──▶  Cognigy Logs API
-   form + dashboard         (credentials)         (_core.py)              (server-side, no CORS)
+Browser (index.html)  ──POST /api/latency──▶  Backend  ──▶  Cognigy Logs API
+   form + dashboard         (credentials)      (_core.py)     (server-side, no CORS)
 ```
 
-The user's API key is sent over HTTPS to the serverless function for that one
-request, used to call Cognigy, and never stored or logged. Frontend and API
-share an origin on both platforms, so there is no CORS configuration.
+The user's API key is sent over HTTPS to the backend for that one request, used
+to call Cognigy, and never stored or logged. Frontend and backend share an
+origin on both platforms, so there is no CORS configuration.
+
+The two platforms run the backend differently, so each has its own thin
+entrypoint, but the latency logic in `_core.py` is identical:
+
+- **Vercel** — a single Flask app (`app.py`) serves both the page and the API.
+  Vercel's Python runtime auto-detects `app.py` as a Flask framework app.
+- **Azure** — Static Web Apps serves `index.html` statically and routes
+  `/api/*` to an Azure Function (`azure_api/function_app.py`).
 
 ```
 latency-web/
 ├── index.html                 — frontend: credentials form + dashboard (shared)
-├── api/
-│   ├── latency.py             — Vercel serverless handler
-│   └── _core.py               — fetch + latency logic (shared core)
+├── app.py                     — Vercel entrypoint: Flask app (page + /api/latency)
+├── _core.py                   — fetch + latency logic (shared core)
+├── requirements.txt           — Vercel deps (flask, requests)
+├── vercel.json                — Vercel config
 ├── azure_api/
 │   ├── function_app.py        — Azure Functions handler
 │   ├── _core.py               — identical copy of the shared core
 │   ├── host.json
 │   └── requirements.txt
-├── requirements.txt           — Vercel Python deps
-├── vercel.json                — Vercel config
 ├── staticwebapp.config.json   — Azure SWA routing + Python runtime
 └── .github/workflows/azure-static-web-apps.yml
 ```
 
-> **Note:** `api/_core.py` and `azure_api/_core.py` are intentionally identical.
-> Each platform packages only its own backend folder, so the core is duplicated
-> rather than imported across folders. If you edit one, copy it to the other:
-> `cp api/_core.py azure_api/_core.py`
+> **Note:** the root `_core.py` and `azure_api/_core.py` are intentionally
+> identical. Each platform packages only its own files, so the core is
+> duplicated rather than imported across folders. If you edit one, copy it to
+> the other: `cp _core.py azure_api/_core.py`
 
 ---
 
@@ -66,8 +73,8 @@ latency-web/
 1. Install the CLI: `npm i -g vercel`
 2. From this folder: `vercel` (follow prompts), then `vercel --prod`
 
-Vercel auto-detects the static `index.html` and the Python function at
-`api/latency.py` (Python deps come from `requirements.txt`). No build step.
+Vercel auto-detects `app.py` as a Flask app (deps from `requirements.txt`) and
+serves the page at `/` and the API at `/api/latency`. No build step.
 
 To deploy from the Vercel dashboard instead: import the Git repo and set the
 **Root Directory** to `cognigy-tools-/latency-web`.
@@ -93,12 +100,13 @@ the frontend calls.
 
 ## Run locally
 
-**Vercel:**
+**Vercel (Flask app directly — simplest):**
 ```bash
-npm i -g vercel
-vercel dev
+pip install -r requirements.txt
+python app.py
 # open http://localhost:3000
 ```
+or with the Vercel CLI: `vercel dev`
 
 **Azure:**
 ```bash
