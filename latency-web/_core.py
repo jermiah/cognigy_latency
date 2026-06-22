@@ -29,6 +29,7 @@ TARGET_CHANNEL    = "voiceGateway2"
 LATENCY_THRESHOLD = 5000   # ms — turns above this are flagged
 GREEN_MAX         = 2500
 YELLOW_MAX        = 5000
+VG2_MARKERS       = ("voicegateway2", "voicegateway", "vg2", "endpoint-vg2client")
 
 
 class CognigyError(Exception):
@@ -231,9 +232,12 @@ def first_matching_value(data, names):
 def filter_vg2(items: list) -> list:
     out = []
     for item in items:
-        ch       = item.get("meta", {}).get("channel", "")
-        trace_id = item.get("traceId", "")
-        if ch == TARGET_CHANNEL or trace_id.startswith("endpoint-vg2client-"):
+        meta     = item.get("meta", {})
+        ch       = str(meta.get("channel", "")).lower()
+        trace_id = str(item.get("traceId", "")).lower()
+        msg      = str(item.get("msg", "")).lower()
+        source   = str(meta.get("source", "")).lower()
+        if any(marker in " ".join([ch, trace_id, msg, source]) for marker in VG2_MARKERS):
             out.append(item)
     return out
 
@@ -304,6 +308,66 @@ def analyze_turns(items: list) -> list:
         if result:
             turns.append(result)
     return turns
+
+
+def sample_values(items: list, key_path, limit: int = 8) -> list:
+    seen = []
+    for item in items:
+        value = item
+        for key in key_path:
+            value = value.get(key, {}) if isinstance(value, dict) else {}
+        if value not in ({}, None, ""):
+            text = str(value)
+            if text not in seen:
+                seen.append(text)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def diagnostics(items: list, all_turns: list, filters: dict) -> str:
+    vg2_items = filter_vg2(items)
+    parts = [
+        f"Fetched {len(items)} raw log entries.",
+        f"Found {len(vg2_items)} possible VoiceGateway log entries.",
+        f"Built {len(all_turns)} complete latency turn(s) before filters.",
+    ]
+    active = []
+    for label, key in (
+        ("date from", "date_from"),
+        ("date to", "date_to"),
+        ("endpoint", "endpoint"),
+        ("session", "session_id"),
+        ("trace", "trace_id"),
+        ("text", "text"),
+        ("tier", "tier"),
+        ("min latency", "min_latency_ms"),
+        ("max latency", "max_latency_ms"),
+    ):
+        value = filters.get(key)
+        if value and value != "all":
+            active.append(f"{label}={value}")
+    if active:
+        parts.append("Active filters: " + ", ".join(active) + ".")
+    channels = sample_values(items, ("meta", "channel"))
+    messages = sample_values(items, ("msg",))
+    if channels:
+        parts.append("Sample channels: " + ", ".join(channels) + ".")
+    if messages:
+        parts.append("Sample messages: " + " | ".join(messages[:4]) + ".")
+    endpoint_filter = (filters.get("endpoint") or "").strip()
+    if endpoint_filter and not all_turns:
+        parts.append(
+            "The endpoint exists, but no complete inbound/outbound VG2 turns were "
+            "built from the fetched logs. Clear the endpoint filter first, then "
+            "try the long endpoint ID from the WebSocket URL if results appear."
+        )
+    elif endpoint_filter:
+        parts.append(
+            "If this is only an endpoint-filter issue, clear the endpoint field "
+            "or use the long endpoint ID from the WebSocket URL instead of the display name."
+        )
+    return " ".join(parts)
 
 
 def filter_turns(turns: list, filters: dict) -> list:
@@ -477,7 +541,8 @@ def compute(payload: dict) -> dict:
     if not turns:
         raise CognigyError(
             "No voiceGateway2 turns matched the current filters. Clear filters, "
-            "increase the log limit, or wait 1–2 minutes for new logs to appear.",
+            "increase the log limit, or wait 1–2 minutes for new logs to appear. "
+            + diagnostics(items, all_turns, filters),
             200,
         )
     data = build_dashboard_data(turns, name, filters)
