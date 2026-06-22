@@ -332,6 +332,13 @@ def diagnostics(items: list, all_turns: list, filters: dict) -> str:
         f"Found {len(vg2_items)} possible VoiceGateway log entries.",
         f"Built {len(all_turns)} complete latency turn(s) before filters.",
     ]
+    turn_dates = sorted(t["inbound_time"][:10] for t in all_turns if t.get("inbound_time"))
+    if turn_dates:
+        start, end = turn_dates[0], turn_dates[-1]
+        if start == end:
+            parts.append(f"Complete turns are dated {start}.")
+        else:
+            parts.append(f"Complete turns range from {start} to {end}.")
     active = []
     for label, key in (
         ("date from", "date_from"),
