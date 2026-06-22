@@ -91,12 +91,27 @@ def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) 
 
         if resp.status_code == 401:
             raise CognigyError("Authentication failed (401). Check your API key.", 401)
+        if resp.status_code == 403:
+            raise CognigyError("Access denied (403). Check that your API key can read project logs.", 403)
         if resp.status_code == 404:
             raise CognigyError("Not found (404). Check your Project ID and base URL.", 404)
+        if resp.status_code == 429:
+            raise CognigyError("Cognigy API rate limit reached (429). Try again in a minute.", 429)
         if not resp.ok:
             raise CognigyError(f"Cognigy API returned {resp.status_code}.", 502)
 
-        data     = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            content_type = resp.headers.get("content-type", "unknown")
+            raise CognigyError(
+                "Cognigy did not return JSON. Check that the Base URL is the "
+                f"API root, not a login or app page. Response content type: {content_type}.",
+                502,
+            )
+        if not isinstance(data, dict):
+            raise CognigyError("Cognigy returned an unexpected response shape.", 502)
+
         embedded = data.get("_embedded", {})
         items    = embedded.get("logEntry", [])
         all_items.extend(items)

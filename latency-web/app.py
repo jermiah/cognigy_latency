@@ -37,6 +37,7 @@ def latency():
         status = 200 if e.status == 200 else e.status
         return jsonify({"error": e.message}), status
     except Exception:  # noqa: BLE001
+        app.logger.exception("Unhandled /api/latency error")
         return jsonify({"error": "Unexpected server error."}), 500
 
 
