@@ -124,54 +124,66 @@ def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) 
     if not project_id:
         raise CognigyError("Project ID is required.")
 
-    headers   = {"X-API-Key": api_key, "Authorization": f"Bearer {api_key}"}
     all_items = []
     page_size = 25
     unlimited = (limit == 0)
-    candidates = [
-        (f"{base_url}/v2.0/projects/{project_id}/logs", {"limit": page_size}),
-        (f"{base_url}/new/v2.0/logs", {"limit": page_size, "projectId": project_id}),
+    auth_candidates = [
+        ("X-API-Key", {"X-API-Key": api_key}),
+        ("Bearer", {"Authorization": f"Bearer {api_key}"}),
+        ("Token", {"Authorization": api_key}),
+    ]
+    url_candidates = [
+        ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", {"limit": page_size}),
+        ("nice", f"{base_url}/new/v2.0/logs", {"limit": page_size, "projectId": project_id}),
     ]
     last_error = None
 
-    for start_url, start_params in candidates:
-        current_url = start_url
-        current_params = start_params
-        all_items = []
+    for _, headers in auth_candidates:
+        for _, start_url, start_params in url_candidates:
+            current_url = start_url
+            current_params = start_params
+            all_items = []
 
-        try:
-            while True:
-                data = _request_json(current_url, headers, current_params)
-                items = _extract_items(data)
-                all_items.extend(items)
+            try:
+                while True:
+                    data = _request_json(current_url, headers, current_params)
+                    items = _extract_items(data)
+                    all_items.extend(items)
 
-                next_href = _next_link(data)
-                if next_href:
-                    parsed    = urlparse(next_href)
-                    params_qs = parse_qs(parsed.query, keep_blank_values=False)
-                    params_qs.pop("previous", None)
-                    clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
-                    next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
-                    current_url    = next_href
-                    current_params = None
+                    next_href = _next_link(data)
+                    if next_href:
+                        parsed    = urlparse(next_href)
+                        params_qs = parse_qs(parsed.query, keep_blank_values=False)
+                        params_qs.pop("previous", None)
+                        clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
+                        next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
+                        current_url    = next_href
+                        current_params = None
 
-                if not next_href or not items:
-                    break
-                if not unlimited and len(all_items) >= limit:
-                    break
-        except CognigyError as e:
-            last_error = e
-            if e.status in (401, 403, 429):
-                raise
-            continue
+                    if not next_href or not items:
+                        break
+                    if not unlimited and len(all_items) >= limit:
+                        break
+            except CognigyError as e:
+                last_error = e
+                if e.status == 429:
+                    raise
+                continue
 
-        if all_items:
-            if not unlimited:
-                all_items = all_items[:limit]
-            all_items.sort(key=lambda x: x.get("timestamp", ""))
-            return all_items
+            if all_items:
+                if not unlimited:
+                    all_items = all_items[:limit]
+                all_items.sort(key=lambda x: x.get("timestamp", ""))
+                return all_items
 
     if last_error:
+        if last_error.status == 401:
+            raise CognigyError(
+                "Authentication failed (401). Tried X-API-Key and Authorization "
+                "against both Cognigy log URL styles. Check that this key is an "
+                "API key for this exact NICE/Cognigy tenant and has log-read access.",
+                401,
+            )
         raise last_error
 
     all_items.sort(key=lambda x: x.get("timestamp", ""))
