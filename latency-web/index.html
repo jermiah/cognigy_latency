@@ -85,6 +85,7 @@
   /* sessions */
   .sess-section { padding: 16px 20px; }
   .sess-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .exports { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .dl { font-size: 11px; font-family: var(--mono); color: var(--text-2); background: none; border: 1px solid var(--border); border-radius: var(--rad); padding: 6px 10px; cursor: pointer; }
   .dl:hover { background: #fff; }
   .sess-card { border: 1px solid var(--border); border-radius: var(--rad-lg); overflow: hidden; margin-bottom: 8px; background: var(--surface); }
@@ -456,7 +457,11 @@ function build(D) {
     <div class="sess-section">
       <div class="sess-bar">
         <div class="sec-lbl" style="margin:0;">Sessions · ${D.raw_log_entries || 0} raw logs · ${D.analyzed_turns_before_filters || D.total_turns} VG2 turns before filters</div>
-        <button class="dl" onclick="downloadCsv()">Download CSV</button>
+        <div class="exports">
+          <button class="dl" onclick="downloadPdf()">Download PDF</button>
+          <button class="dl" onclick="downloadExcel()">Download Excel</button>
+          <button class="dl" onclick="downloadCsv()">Download CSV</button>
+        </div>
       </div>
       ${D.sessions.map(s => buildSession(s, D.max_latency_ms)).join('')}
     </div>
@@ -550,6 +555,119 @@ function downloadCsv() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+function filename(ext) {
+  const project = (LAST_DATA?.project || 'latency').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'latency';
+  const range = (LAST_DATA?.date_range || 'report').replace(/[^0-9a-z]+/gi, '_').replace(/^_+|_+$/g, '');
+  return project + '_' + range + '_latency.' + ext;
+}
+
+function allRows(D) {
+  const rows = [];
+  for (const s of D.sessions || []) {
+    for (const t of s.turns || []) rows.push({s, t});
+  }
+  return rows;
+}
+
+function reportSummaryHtml(D) {
+  return `
+    <table>
+      <tr><th>Project</th><td>${esc(D.project)}</td><th>Generated</th><td>${esc(D.generated_at)}</td></tr>
+      <tr><th>Date range</th><td>${esc(D.date_range || '')}</td><th>Raw log entries</th><td>${D.raw_log_entries || 0}</td></tr>
+      <tr><th>Total turns</th><td>${D.total_turns}</td><th>Sessions</th><td>${D.total_sessions}</td></tr>
+      <tr><th>Average latency</th><td>${fmt(D.avg_latency_ms)}</td><th>Min / Max latency</th><td>${fmt(D.min_latency_ms)} / ${fmt(D.max_latency_ms)}</td></tr>
+      <tr><th>Acceptable</th><td>${D.tier_counts.green} (${D.tier_pct.green}%)</td><th>Degraded</th><td>${D.tier_counts.yellow} (${D.tier_pct.yellow}%)</td></tr>
+      <tr><th>Unacceptable</th><td>${D.tier_counts.red} (${D.tier_pct.red}%)</td><th>Formula</th><td>First output timestamp minus received-user timestamp, grouped by trace ID</td></tr>
+    </table>`;
+}
+
+function reportTurnsHtml(D) {
+  const rows = allRows(D);
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Session #</th><th>Session ID</th><th>Turn #</th><th>Inbound time</th><th>Tier</th>
+          <th>First-token latency</th><th>Full response</th><th>Endpoint</th><th>Trace ID</th><th>User text</th><th>First bot text</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(({s,t}) => `
+          <tr>
+            <td>${s.session_number}</td>
+            <td>${esc(s.session_id)}</td>
+            <td>${t.turn_number}</td>
+            <td>${esc(t.inbound_time || '')}</td>
+            <td>${esc(t.tier_label || t.tier)}</td>
+            <td>${t.first_token_ms}</td>
+            <td>${t.full_response_ms}</td>
+            <td>${esc(t.endpoint_name || t.endpoint_id || '')}</td>
+            <td>${esc(t.trace_id || '')}</td>
+            <td>${esc(t.user_text || '')}</td>
+            <td>${esc(t.first_bot_text || '')}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function downloadExcel() {
+  if (!LAST_DATA) return;
+  const html = `
+    <html>
+      <head><meta charset="UTF-8"></head>
+      <body>
+        <h1>VoiceGateway2 Latency Report</h1>
+        <h2>Summary</h2>${reportSummaryHtml(LAST_DATA)}
+        <h2>Turns</h2>${reportTurnsHtml(LAST_DATA)}
+      </body>
+    </html>`;
+  const blob = new Blob(['\ufeff' + html], {type: 'application/vnd.ms-excel;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename('xls');
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function downloadPdf() {
+  if (!LAST_DATA) return;
+  const win = window.open('', '_blank');
+  if (!win) {
+    setStatus('Popup blocked. Allow popups for this site, then try Download PDF again.', true);
+    return;
+  }
+  win.document.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>${esc(LAST_DATA.project)} Latency Report</title>
+        <style>
+          @page { size: A4 landscape; margin: 14mm; }
+          body { font-family: Arial, sans-serif; color: #1a1917; }
+          h1 { font-size: 22px; margin: 0 0 4px; }
+          h2 { font-size: 14px; margin: 18px 0 8px; }
+          .sub { color: #666; font-size: 11px; margin-bottom: 14px; }
+          table { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 12px; }
+          th, td { border: 1px solid #ddd; padding: 5px 6px; vertical-align: top; }
+          th { background: #f1f1ef; text-align: left; }
+          tr { break-inside: avoid; }
+          .formula { font-size: 11px; margin: 10px 0 14px; }
+        </style>
+      </head>
+      <body>
+        <h1>VoiceGateway2 Latency Report</h1>
+        <div class="sub">${esc(LAST_DATA.project)} · ${esc(LAST_DATA.date_range || '')} · Generated ${esc(LAST_DATA.generated_at)}</div>
+        <div class="formula">Latency = first “Sent output to Endpoint” timestamp minus matching “Received message from user” timestamp, grouped by trace ID. Full response latency uses the last output segment for the same turn.</div>
+        <h2>Summary</h2>${reportSummaryHtml(LAST_DATA)}
+        <h2>Turns</h2>${reportTurnsHtml(LAST_DATA)}
+        <script>window.onload = () => { window.print(); }<\/script>
+      </body>
+    </html>`);
+  win.document.close();
+}
+
 function q(s) { return '"' + String(s).replace(/"/g,'""') + '"'; }
 function pushRow(rows, s, t) {
   rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id), q(t.endpoint_name), q(t.inbound_time), t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));

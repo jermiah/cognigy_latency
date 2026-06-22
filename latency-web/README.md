@@ -50,6 +50,16 @@ created. Available filters:
 - Minimum / maximum first-token latency
 - Show all matching turns or only slow/degraded turns
 
+## Report downloads
+
+After generating a report, the dashboard can export the currently filtered
+view as:
+
+- PDF — opens a print-ready report that can be saved as PDF.
+- Excel — downloads an Excel-readable `.xls` workbook with summary and turn
+  detail tables.
+- CSV — downloads raw filtered turn rows for analysis.
+
 ---
 
 ## How it works
