@@ -24,6 +24,7 @@
   .db-head { background: var(--text); padding: 22px 28px 18px; }
   .db-head h1 { font-size: 17px; font-weight: 500; color: #fff; margin: 0 0 3px; letter-spacing: -0.2px; }
   .db-head p  { font-size: 11px; color: rgba(255,255,255,0.45); margin: 0; font-family: var(--mono); }
+  .db-head .calc-line { margin-top: 8px; color: rgba(255,255,255,0.62); max-width: 880px; line-height: 1.45; }
 
   /* form */
   .form-section { background: var(--surface); border-bottom: 1px solid var(--border); padding: 20px 28px 24px; }
@@ -131,6 +132,7 @@
   <div class="db-head">
     <h1>VoiceGateway2 — Latency Calculator</h1>
     <p>Measure first-token latency from your Cognigy voice bot logs</p>
+    <p class="calc-line">Latency = first “Sent output to Endpoint” timestamp minus matching “Received message from user” timestamp, grouped by trace ID. The full response value uses the last output segment for the same turn.</p>
   </div>
 
   <div class="form-section">
@@ -237,6 +239,7 @@ function fmt(ms) { return ms >= 1000 ? (ms/1000).toFixed(2)+'s' : ms.toLocaleStr
 function tierClass(t) { return {green:'g', yellow:'y', red:'r'}[t]; }
 function esc(s) { return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+let LAST_FULL_DATA = null;
 let LAST_DATA = null;
 
 const form    = document.getElementById('cfg');
@@ -251,16 +254,6 @@ form.addEventListener('submit', async (e) => {
     project_id: document.getElementById('project_id').value,
     api_key:    document.getElementById('api_key').value,
     limit:      parseInt(document.getElementById('limit').value, 10),
-    date_from:  document.getElementById('date_from').value,
-    date_to:    document.getElementById('date_to').value,
-    endpoint:   document.getElementById('endpoint').value,
-    session_id: document.getElementById('session_id').value,
-    trace_id:   document.getElementById('trace_id').value,
-    text:       document.getElementById('text').value,
-    tier:       document.getElementById('tier').value,
-    min_latency_ms: document.getElementById('min_latency_ms').value,
-    max_latency_ms: document.getElementById('max_latency_ms').value,
-    show_all_turns: document.getElementById('show_all_turns').checked,
   };
   if (!payload.base_url || !payload.project_id || !payload.api_key) {
     setStatus('Base URL, Project ID and API key are all required.', true);
@@ -281,9 +274,8 @@ form.addEventListener('submit', async (e) => {
     if (!res.ok || data.error) {
       setStatus(data.error || ('Request failed (' + res.status + ').'), true);
     } else {
-      LAST_DATA = data;
-      setStatus('Done — ' + data.total_turns + ' matching turns across ' + data.total_sessions + ' session(s).', false);
-      build(data);
+      LAST_FULL_DATA = data;
+      applyFilters();
     }
   } catch (err) {
     setStatus('Network error — could not reach the server.', true);
@@ -292,9 +284,133 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
+for (const id of ['date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
+  document.getElementById(id).addEventListener('input', applyFilters);
+  document.getElementById(id).addEventListener('change', applyFilters);
+}
+
 function setStatus(html, isErr) {
   statusEl.className = 'status' + (isErr ? ' err' : '');
   statusEl.innerHTML = html;
+}
+
+function getTier(ms) {
+  if (ms < 2500) return 'green';
+  if (ms < 5000) return 'yellow';
+  return 'red';
+}
+
+function tierLabel(tier) {
+  return {green:'Acceptable', yellow:'Degraded', red:'Unacceptable'}[tier] || tier;
+}
+
+function filterSettings() {
+  return {
+    date_from: document.getElementById('date_from').value,
+    date_to: document.getElementById('date_to').value,
+    endpoint: document.getElementById('endpoint').value.trim().toLowerCase(),
+    session_id: document.getElementById('session_id').value.trim().toLowerCase(),
+    trace_id: document.getElementById('trace_id').value.trim().toLowerCase(),
+    text: document.getElementById('text').value.trim().toLowerCase(),
+    tier: document.getElementById('tier').value,
+    min_latency_ms: parseInt(document.getElementById('min_latency_ms').value || '0', 10),
+    max_latency_ms: parseInt(document.getElementById('max_latency_ms').value || '0', 10),
+    show_all_turns: document.getElementById('show_all_turns').checked,
+  };
+}
+
+function turnMatches(t, s, F) {
+  const day = (t.inbound_time || '').slice(0, 10);
+  if (F.date_from && day && day < F.date_from) return false;
+  if (F.date_to && day && day > F.date_to) return false;
+  if (F.session_id && !String(s.session_id || '').toLowerCase().includes(F.session_id)) return false;
+  if (F.trace_id && !String(t.trace_id || '').toLowerCase().includes(F.trace_id)) return false;
+  const endpointBlob = [t.endpoint_id, t.endpoint_name, t.trace_id].join(' ').toLowerCase();
+  if (F.endpoint && !endpointBlob.includes(F.endpoint)) return false;
+  const textBlob = [t.user_text, t.first_bot_text].join(' ').toLowerCase();
+  if (F.text && !textBlob.includes(F.text)) return false;
+  if (F.tier !== 'all' && t.tier !== F.tier) return false;
+  if (F.min_latency_ms && t.first_token_ms < F.min_latency_ms) return false;
+  if (F.max_latency_ms && t.first_token_ms > F.max_latency_ms) return false;
+  return true;
+}
+
+function filteredData(full, F) {
+  const sessions = [];
+  const latencies = [];
+  const tierCounts = {green: 0, yellow: 0, red: 0};
+
+  for (const sourceSession of full.sessions || []) {
+    const turns = (sourceSession.turns || []).filter(t => turnMatches(t, sourceSession, F));
+    if (!turns.length) continue;
+
+    const sLats = turns.map(t => t.first_token_ms);
+    const peak = Math.max(...sLats);
+    const tier = getTier(peak);
+    const allTurns = turns.map((t, idx) => {
+      const turnTier = t.tier || getTier(t.first_token_ms);
+      tierCounts[turnTier] += 1;
+      return {...t, turn_number: idx + 1, tier: turnTier, tier_label: tierLabel(turnTier)};
+    });
+    latencies.push(...sLats);
+    const flagged = allTurns.filter(t => t.tier !== 'green');
+
+    sessions.push({
+      session_number: sessions.length + 1,
+      session_id: sourceSession.session_id,
+      session_start: allTurns[0].inbound_time || sourceSession.session_start,
+      turn_count: allTurns.length,
+      avg_latency_ms: Math.round(sLats.reduce((a,b) => a + b, 0) / sLats.length),
+      peak_latency_ms: peak,
+      tier,
+      tier_label: tierLabel(tier),
+      turns: allTurns,
+      display_turns: F.show_all_turns ? allTurns : flagged,
+      flagged_turns: flagged,
+      has_flags: flagged.length > 0,
+    });
+  }
+
+  if (!latencies.length) return null;
+  const total = latencies.length;
+  const timestamps = sessions.map(s => s.session_start).filter(Boolean).sort();
+  const start = timestamps[0] ? timestamps[0].slice(0, 10) : '';
+  const end = timestamps[timestamps.length - 1] ? timestamps[timestamps.length - 1].slice(0, 10) : '';
+
+  return {
+    ...full,
+    date_range: start && end ? (start === end ? start : start + ' – ' + end) : '',
+    total_turns: total,
+    total_sessions: sessions.length,
+    avg_latency_ms: Math.round(latencies.reduce((a,b) => a + b, 0) / total),
+    min_latency_ms: Math.min(...latencies),
+    max_latency_ms: Math.max(...latencies),
+    tier_counts: tierCounts,
+    tier_pct: Object.fromEntries(Object.entries(tierCounts).map(([k,v]) => [k, Math.round(v / total * 100)])),
+    filters: F,
+    sessions,
+  };
+}
+
+function applyFilters() {
+  if (!LAST_FULL_DATA) return;
+  const F = filterSettings();
+  const filtered = filteredData(LAST_FULL_DATA, F);
+  if (!filtered) {
+    LAST_DATA = null;
+    const fullTurns = LAST_FULL_DATA.total_turns || 0;
+    const fullDate = LAST_FULL_DATA.date_range ? ' Full report date range: ' + esc(LAST_FULL_DATA.date_range) + '.' : '';
+    setStatus('Full report generated (' + fullTurns + ' turns), but 0 turns match the current filters.' + fullDate, true);
+    document.getElementById('report').innerHTML = `
+      <div class="tier-section">
+        <div class="sec-lbl">No matching turns</div>
+        <div class="txb">The full report is loaded. Clear or adjust the filters to show matching sessions.</div>
+      </div>`;
+    return;
+  }
+  LAST_DATA = filtered;
+  setStatus('Full report generated — showing ' + filtered.total_turns + ' of ' + LAST_FULL_DATA.total_turns + ' turns across ' + filtered.total_sessions + ' session(s).', false);
+  build(filtered);
 }
 
 function build(D) {
@@ -390,7 +506,7 @@ function buildSession(s, maxMs) {
 function buildTurnRow(t, maxMs) {
   const tc = tierClass(t.tier);
   const pctw = Math.round((t.first_token_ms / maxMs) * 100);
-  const rowClass = tc === 'y' ? 'fy' : 'fr';
+  const rowClass = tc === 'y' ? 'fy' : (tc === 'r' ? 'fr' : '');
   const userText = t.user_text ? esc(t.user_text.slice(0,90)) + (t.user_text.length>90?'&hellip;':'')
                                : '<em style="color:#9b9890">— call connected —</em>';
   const botText  = t.first_bot_text ? esc(t.first_bot_text.slice(0,90)) + (t.first_bot_text.length>90?'&hellip;':'') : '';

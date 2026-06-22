@@ -18,6 +18,16 @@ processing time the caller perceives as the pause. It does **not** include
 speech-to-text finalization, text-to-speech synthesis, or telephony network
 time — those happen in the voice gateway, outside Cognigy's logs.
 
+Formula:
+
+```
+first-token latency = first "Sent output to Endpoint" timestamp
+                    - matching "Received message from user" timestamp
+```
+
+Events are matched by `traceId`. The full-response latency shown per turn uses
+the last output segment for that same trace.
+
 | Tier | Range | Meaning |
 |---|---|---|
 | 🟢 Acceptable | < 2,500 ms | Normal |
@@ -26,8 +36,10 @@ time — those happen in the voice gateway, outside Cognigy's logs.
 
 ## Filters
 
-The dashboard fetches project logs, keeps VoiceGateway2 turns, then applies
-report filters before calculating averages and tier counts. Available filters:
+The dashboard fetches project logs and builds the full VoiceGateway2 report
+first. Filters are then applied locally to the generated report so a narrow
+date, endpoint, or session search cannot prevent the base report from being
+created. Available filters:
 
 - Date from / date to
 - Endpoint name, endpoint ID, or trace prefix
