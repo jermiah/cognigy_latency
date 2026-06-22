@@ -14,7 +14,7 @@ Keep this file identical in both folders. It is duplicated rather than shared
 because each platform packages only its own backend directory at deploy time.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -54,6 +54,60 @@ def tier_label(ms: int) -> str:
 
 # ── API fetching ────────────────────────────────────────────────────────────
 
+def _extract_items(data):
+    if isinstance(data, list):
+        return data
+    embedded = data.get("_embedded", {})
+    for key in ("logEntry", "logs", "items", "data"):
+        value = embedded.get(key) if key in embedded else data.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _next_link(data):
+    links = data.get("_links", {}) if isinstance(data, dict) else {}
+    next_link = links.get("next", {})
+    if isinstance(next_link, dict):
+        return next_link.get("href", "")
+    if isinstance(next_link, str):
+        return next_link
+    return ""
+
+
+def _request_json(url, headers, params):
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+    except requests.exceptions.ConnectionError:
+        raise CognigyError(f"Could not connect to {url}. Check the base URL.", 502)
+    except requests.exceptions.Timeout:
+        raise CognigyError("Request to Cognigy timed out. Try a smaller limit.", 504)
+
+    if resp.status_code == 401:
+        raise CognigyError("Authentication failed (401). Check your API key.", 401)
+    if resp.status_code == 403:
+        raise CognigyError("Access denied (403). Check that your API key can read project logs.", 403)
+    if resp.status_code == 429:
+        raise CognigyError("Cognigy API rate limit reached (429). Try again in a minute.", 429)
+    if resp.status_code == 404:
+        raise CognigyError("Not found (404). Check your Project ID and base URL.", 404)
+    if not resp.ok:
+        raise CognigyError(f"Cognigy API returned {resp.status_code}.", 502)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        content_type = resp.headers.get("content-type", "unknown")
+        raise CognigyError(
+            "Cognigy did not return JSON. Check that the Base URL is the "
+            f"API root, not a login or app page. Response content type: {content_type}.",
+            502,
+        )
+    if not isinstance(data, (dict, list)):
+        raise CognigyError("Cognigy returned an unexpected response shape.", 502)
+    return data
+
+
 def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) -> list:
     """
     Fetch log entries from the Cognigy Logs API, paginating automatically.
@@ -70,72 +124,55 @@ def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) 
     if not project_id:
         raise CognigyError("Project ID is required.")
 
-    headers   = {"X-API-Key": api_key}
+    headers   = {"X-API-Key": api_key, "Authorization": f"Bearer {api_key}"}
     all_items = []
-    page      = 1
     page_size = 25
     unlimited = (limit == 0)
+    candidates = [
+        (f"{base_url}/v2.0/projects/{project_id}/logs", {"limit": page_size}),
+        (f"{base_url}/new/v2.0/logs", {"limit": page_size, "projectId": project_id}),
+    ]
+    last_error = None
 
-    current_url    = f"{base_url}/v2.0/projects/{project_id}/logs"
-    current_params = {"limit": page_size}
-
-    while True:
-        try:
-            resp = requests.get(
-                current_url, headers=headers, params=current_params, timeout=30
-            )
-        except requests.exceptions.ConnectionError:
-            raise CognigyError(f"Could not connect to {base_url}. Check the base URL.", 502)
-        except requests.exceptions.Timeout:
-            raise CognigyError("Request to Cognigy timed out. Try a smaller limit.", 504)
-
-        if resp.status_code == 401:
-            raise CognigyError("Authentication failed (401). Check your API key.", 401)
-        if resp.status_code == 403:
-            raise CognigyError("Access denied (403). Check that your API key can read project logs.", 403)
-        if resp.status_code == 404:
-            raise CognigyError("Not found (404). Check your Project ID and base URL.", 404)
-        if resp.status_code == 429:
-            raise CognigyError("Cognigy API rate limit reached (429). Try again in a minute.", 429)
-        if not resp.ok:
-            raise CognigyError(f"Cognigy API returned {resp.status_code}.", 502)
+    for start_url, start_params in candidates:
+        current_url = start_url
+        current_params = start_params
+        all_items = []
 
         try:
-            data = resp.json()
-        except ValueError:
-            content_type = resp.headers.get("content-type", "unknown")
-            raise CognigyError(
-                "Cognigy did not return JSON. Check that the Base URL is the "
-                f"API root, not a login or app page. Response content type: {content_type}.",
-                502,
-            )
-        if not isinstance(data, dict):
-            raise CognigyError("Cognigy returned an unexpected response shape.", 502)
+            while True:
+                data = _request_json(current_url, headers, current_params)
+                items = _extract_items(data)
+                all_items.extend(items)
 
-        embedded = data.get("_embedded", {})
-        items    = embedded.get("logEntry", [])
-        all_items.extend(items)
+                next_href = _next_link(data)
+                if next_href:
+                    parsed    = urlparse(next_href)
+                    params_qs = parse_qs(parsed.query, keep_blank_values=False)
+                    params_qs.pop("previous", None)
+                    clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
+                    next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
+                    current_url    = next_href
+                    current_params = None
 
-        next_href = data.get("_links", {}).get("next", {}).get("href", "")
-        if next_href:
-            parsed    = urlparse(next_href)
-            params_qs = parse_qs(parsed.query, keep_blank_values=False)
-            params_qs.pop("previous", None)
-            clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
-            next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
-            current_url    = next_href
-            current_params = None
-        else:
-            next_href = None
+                if not next_href or not items:
+                    break
+                if not unlimited and len(all_items) >= limit:
+                    break
+        except CognigyError as e:
+            last_error = e
+            if e.status in (401, 403, 429):
+                raise
+            continue
 
-        page += 1
-        if not next_href or not items:
-            break
-        if not unlimited and len(all_items) >= limit:
-            break
+        if all_items:
+            if not unlimited:
+                all_items = all_items[:limit]
+            all_items.sort(key=lambda x: x.get("timestamp", ""))
+            return all_items
 
-    if not unlimited:
-        all_items = all_items[:limit]
+    if last_error:
+        raise last_error
 
     all_items.sort(key=lambda x: x.get("timestamp", ""))
     return all_items
@@ -144,7 +181,39 @@ def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) 
 # ── Filtering, grouping, latency ──────────────────────────────────────────────
 
 def parse_ts(ts_str: str) -> datetime:
-    return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def parse_date_boundary(value: str, end_of_day: bool = False):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = datetime.combine(dt.date(), time.max if end_of_day else time.min, timezone.utc)
+    return dt
+
+
+def first_matching_value(data, names):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            key_l = key.lower()
+            if key_l in names and value not in (None, ""):
+                return str(value)
+            found = first_matching_value(value, names)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for value in data:
+            found = first_matching_value(value, names)
+            if found:
+                return found
+    return ""
 
 
 def filter_vg2(items: list) -> list:
@@ -183,6 +252,14 @@ def compute_turn_latency(entries: list):
     first_out_ts = parse_ts(outbounds[0]["timestamp"])
     last_out_ts  = parse_ts(outbounds[-1]["timestamp"])
     user_text    = inbound.get("meta", {}).get("text", "") or ""
+    endpoint_id  = first_matching_value(
+        entries,
+        {"endpointid", "endpoint_id", "endpointreference", "endpointreferenceid"},
+    )
+    endpoint_name = first_matching_value(
+        entries,
+        {"endpointname", "endpoint_name", "endpoint", "urlname"},
+    )
 
     first_ms = int((first_out_ts - inbound_ts).total_seconds() * 1000)
     full_ms  = int((last_out_ts  - inbound_ts).total_seconds() * 1000)
@@ -190,6 +267,8 @@ def compute_turn_latency(entries: list):
     return {
         "session_id":               inbound.get("meta", {}).get("sessionId", "unknown"),
         "trace_id":                 inbound.get("traceId", ""),
+        "endpoint_id":              endpoint_id,
+        "endpoint_name":            endpoint_name,
         "inbound_time":             inbound["timestamp"],
         "first_output_time":        outbounds[0]["timestamp"],
         "last_output_time":         outbounds[-1]["timestamp"],
@@ -215,9 +294,62 @@ def analyze_turns(items: list) -> list:
     return turns
 
 
+def filter_turns(turns: list, filters: dict) -> list:
+    session_q = (filters.get("session_id") or "").strip().lower()
+    endpoint_q = (filters.get("endpoint") or "").strip().lower()
+    trace_q = (filters.get("trace_id") or "").strip().lower()
+    text_q = (filters.get("text") or "").strip().lower()
+    tier_q = (filters.get("tier") or "all").strip().lower()
+    date_from = parse_date_boundary(filters.get("date_from") or "")
+    date_to = parse_date_boundary(filters.get("date_to") or "", end_of_day=True)
+
+    try:
+        min_latency = int(filters.get("min_latency_ms") or 0)
+    except (TypeError, ValueError):
+        min_latency = 0
+    try:
+        max_latency = int(filters.get("max_latency_ms") or 0)
+    except (TypeError, ValueError):
+        max_latency = 0
+
+    out = []
+    for turn in turns:
+        inbound_dt = parse_ts(turn["inbound_time"])
+        if date_from and inbound_dt < date_from:
+            continue
+        if date_to and inbound_dt > date_to:
+            continue
+        if session_q and session_q not in turn.get("session_id", "").lower():
+            continue
+        endpoint_blob = " ".join([
+            turn.get("endpoint_id", ""),
+            turn.get("endpoint_name", ""),
+            turn.get("trace_id", ""),
+        ]).lower()
+        if endpoint_q and endpoint_q not in endpoint_blob:
+            continue
+        if trace_q and trace_q not in turn.get("trace_id", "").lower():
+            continue
+        if text_q:
+            text_blob = " ".join([
+                turn.get("user_text", ""),
+                turn.get("first_bot_text", ""),
+            ]).lower()
+            if text_q not in text_blob:
+                continue
+        if tier_q in {"green", "yellow", "red"} and get_tier(turn["first_token_latency_ms"]) != tier_q:
+            continue
+        if min_latency and turn["first_token_latency_ms"] < min_latency:
+            continue
+        if max_latency and turn["first_token_latency_ms"] > max_latency:
+            continue
+        out.append(turn)
+    return out
+
+
 # ── Dashboard data assembly ────────────────────────────────────────────────────
 
-def build_dashboard_data(turns: list, project_name: str) -> dict:
+def build_dashboard_data(turns: list, project_name: str, filters: dict) -> dict:
     """Turn the per-turn list into the JSON structure the frontend renders."""
     sessions_map = defaultdict(list)
     for t in turns:
@@ -241,6 +373,10 @@ def build_dashboard_data(turns: list, project_name: str) -> dict:
             s_lats.append(ms)
             out_turns.append({
                 "turn_number":         t_num,
+                "trace_id":            t.get("trace_id", ""),
+                "endpoint_id":         t.get("endpoint_id", ""),
+                "endpoint_name":       t.get("endpoint_name", ""),
+                "inbound_time":        t.get("inbound_time", ""),
                 "first_token_ms":      ms,
                 "full_response_ms":    t["full_response_latency_ms"],
                 "tier":                tier,
@@ -253,6 +389,7 @@ def build_dashboard_data(turns: list, project_name: str) -> dict:
 
         s_max = max(s_lats)
         flagged_turns = [t for t in out_turns if t["tier"] != "green"]
+        show_all_turns = bool(filters.get("show_all_turns"))
         session_data.append({
             "session_number":  s_num,
             "session_id":      session_id,
@@ -262,6 +399,8 @@ def build_dashboard_data(turns: list, project_name: str) -> dict:
             "peak_latency_ms": s_max,
             "tier":            get_tier(s_max),
             "tier_label":      tier_label(s_max),
+            "turns":           out_turns,
+            "display_turns":   out_turns if show_all_turns else flagged_turns,
             "flagged_turns":   flagged_turns,
             "has_flags":       len(flagged_turns) > 0,
         })
@@ -286,6 +425,7 @@ def build_dashboard_data(turns: list, project_name: str) -> dict:
         "tier_pct":       {k: round(v / total * 100) for k, v in tier_counts.items()},
         "green_max_ms":   GREEN_MAX,
         "yellow_max_ms":  YELLOW_MAX,
+        "filters":        filters,
         "sessions":       session_data,
     }
 
@@ -293,7 +433,7 @@ def build_dashboard_data(turns: list, project_name: str) -> dict:
 def compute(payload: dict) -> dict:
     """
     Top-level entry used by both backends.
-    payload: { name, api_key, project_id, base_url, limit }
+    payload: { name, api_key, project_id, base_url, limit, filters }
     Returns the dashboard data dict. Raises CognigyError for user-facing issues.
     """
     name = (payload.get("name") or "Cognigy Project").strip()
@@ -308,10 +448,27 @@ def compute(payload: dict) -> dict:
         project_id=payload.get("project_id", ""),
         limit=limit,
     )
-    turns = analyze_turns(items)
+    all_turns = analyze_turns(items)
+    filters = {
+        "date_from":       payload.get("date_from", ""),
+        "date_to":         payload.get("date_to", ""),
+        "endpoint":        payload.get("endpoint", ""),
+        "session_id":      payload.get("session_id", ""),
+        "trace_id":        payload.get("trace_id", ""),
+        "text":            payload.get("text", ""),
+        "tier":            payload.get("tier", "all"),
+        "min_latency_ms":  payload.get("min_latency_ms", ""),
+        "max_latency_ms":  payload.get("max_latency_ms", ""),
+        "show_all_turns":  bool(payload.get("show_all_turns")),
+    }
+    turns = filter_turns(all_turns, filters)
     if not turns:
         raise CognigyError(
-            "No voiceGateway2 turns found. Make some voice calls first, then "
-            "wait 1–2 minutes for logs to appear and try again.", 200
+            "No voiceGateway2 turns matched the current filters. Clear filters, "
+            "increase the log limit, or wait 1–2 minutes for new logs to appear.",
+            200,
         )
-    return build_dashboard_data(turns, name)
+    data = build_dashboard_data(turns, name, filters)
+    data["raw_log_entries"] = len(items)
+    data["analyzed_turns_before_filters"] = len(all_turns)
+    return data

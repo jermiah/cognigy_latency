@@ -24,6 +24,20 @@ time — those happen in the voice gateway, outside Cognigy's logs.
 | 🟡 Degraded | 2,500–5,000 ms | Noticeable delay |
 | 🔴 Unacceptable | > 5,000 ms | Action required |
 
+## Filters
+
+The dashboard fetches project logs, keeps VoiceGateway2 turns, then applies
+report filters before calculating averages and tier counts. Available filters:
+
+- Date from / date to
+- Endpoint name, endpoint ID, or trace prefix
+- Session ID search
+- Trace ID search
+- User/bot transcript text search
+- Latency tier
+- Minimum / maximum first-token latency
+- Show all matching turns or only slow/degraded turns
+
 ---
 
 ## How it works

@@ -37,6 +37,9 @@
   }
   .field input:focus, .field select:focus { outline: none; border-color: var(--text-3); background: #fff; }
   .field .hint { font-size: 10px; color: var(--text-3); }
+  .checkline { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
+  .checkline input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .checkline label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
   .actions { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
   button.run {
     font-family: var(--sans); font-size: 13px; font-weight: 500; color: #fff; background: var(--accent);
@@ -163,6 +166,60 @@
           </select>
           <span class="hint">More = longer history but slower.</span>
         </div>
+        <div class="field">
+          <label for="date_from">Date from</label>
+          <input id="date_from" name="date_from" type="date">
+          <span class="hint">Filters by caller turn timestamp.</span>
+        </div>
+        <div class="field">
+          <label for="date_to">Date to</label>
+          <input id="date_to" name="date_to" type="date">
+          <span class="hint">Inclusive end date.</span>
+        </div>
+        <div class="field">
+          <label for="endpoint">Endpoint filter</label>
+          <input id="endpoint" name="endpoint" type="text" placeholder="Endpoint name, ID, or trace prefix">
+          <span class="hint">Leave empty to include all VG2 endpoints.</span>
+        </div>
+        <div class="field">
+          <label for="session_id">Session ID search</label>
+          <input id="session_id" name="session_id" type="text" placeholder="Paste a full or partial session ID">
+          <span class="hint">Matches partial session IDs.</span>
+        </div>
+        <div class="field">
+          <label for="trace_id">Trace ID search</label>
+          <input id="trace_id" name="trace_id" type="text" placeholder="endpoint-vg2client-...">
+          <span class="hint">Useful for one specific turn or call trace.</span>
+        </div>
+        <div class="field">
+          <label for="text">Transcript search</label>
+          <input id="text" name="text" type="text" placeholder="Search user or first bot text">
+          <span class="hint">Matches text found in computed turns.</span>
+        </div>
+        <div class="field">
+          <label for="tier">Latency tier</label>
+          <select id="tier" name="tier">
+            <option value="all" selected>All tiers</option>
+            <option value="green">Acceptable only</option>
+            <option value="yellow">Degraded only</option>
+            <option value="red">Unacceptable only</option>
+          </select>
+          <span class="hint">Filter by first-token latency class.</span>
+        </div>
+        <div class="field">
+          <label for="min_latency_ms">Minimum latency</label>
+          <input id="min_latency_ms" name="min_latency_ms" type="number" min="0" step="100" placeholder="0">
+          <span class="hint">Milliseconds. Example: 2500.</span>
+        </div>
+        <div class="field">
+          <label for="max_latency_ms">Maximum latency</label>
+          <input id="max_latency_ms" name="max_latency_ms" type="number" min="0" step="100" placeholder="No maximum">
+          <span class="hint">Milliseconds. Leave empty for no cap.</span>
+        </div>
+        <div class="field checkline">
+          <input id="show_all_turns" name="show_all_turns" type="checkbox">
+          <label for="show_all_turns">Show all matching turns, not only slow turns</label>
+        </div>
       </div>
       <div class="actions">
         <button class="run" id="runBtn" type="submit">Calculate latency</button>
@@ -194,6 +251,16 @@ form.addEventListener('submit', async (e) => {
     project_id: document.getElementById('project_id').value,
     api_key:    document.getElementById('api_key').value,
     limit:      parseInt(document.getElementById('limit').value, 10),
+    date_from:  document.getElementById('date_from').value,
+    date_to:    document.getElementById('date_to').value,
+    endpoint:   document.getElementById('endpoint').value,
+    session_id: document.getElementById('session_id').value,
+    trace_id:   document.getElementById('trace_id').value,
+    text:       document.getElementById('text').value,
+    tier:       document.getElementById('tier').value,
+    min_latency_ms: document.getElementById('min_latency_ms').value,
+    max_latency_ms: document.getElementById('max_latency_ms').value,
+    show_all_turns: document.getElementById('show_all_turns').checked,
   };
   if (!payload.base_url || !payload.project_id || !payload.api_key) {
     setStatus('Base URL, Project ID and API key are all required.', true);
@@ -215,7 +282,7 @@ form.addEventListener('submit', async (e) => {
       setStatus(data.error || ('Request failed (' + res.status + ').'), true);
     } else {
       LAST_DATA = data;
-      setStatus('Done — ' + data.total_turns + ' turns across ' + data.total_sessions + ' session(s).', false);
+      setStatus('Done — ' + data.total_turns + ' matching turns across ' + data.total_sessions + ' session(s).', false);
       build(data);
     }
   } catch (err) {
@@ -272,7 +339,7 @@ function build(D) {
 
     <div class="sess-section">
       <div class="sess-bar">
-        <div class="sec-lbl" style="margin:0;">Sessions</div>
+        <div class="sec-lbl" style="margin:0;">Sessions · ${D.raw_log_entries || 0} raw logs · ${D.analyzed_turns_before_filters || D.total_turns} VG2 turns before filters</div>
         <button class="dl" onclick="downloadCsv()">Download CSV</button>
       </div>
       ${D.sessions.map(s => buildSession(s, D.max_latency_ms)).join('')}
@@ -283,19 +350,21 @@ function build(D) {
 
 function buildSession(s, maxMs) {
   const tc = tierClass(s.tier);
+  const rows = s.display_turns || s.flagged_turns || [];
+  const hasRows = rows.length > 0;
   const isGreen = s.tier === 'green';
   const peakClass = isGreen ? '' : ` ${tc}`;
-  const headClass = isGreen ? 'sess-head' : 'sess-head clickable';
-  const chevron   = isGreen ? '' : `<span class="chev open" id="chev-${s.session_number}">&#9660;</span>`;
-  const onclick   = isGreen ? '' : `onclick="tog(${s.session_number})"`;
-  const turnsHtml = isGreen ? '' : `
+  const headClass = hasRows ? 'sess-head clickable' : 'sess-head';
+  const chevron   = hasRows ? `<span class="chev open" id="chev-${s.session_number}">&#9660;</span>` : '';
+  const onclick   = hasRows ? `onclick="tog(${s.session_number})"` : '';
+  const turnsHtml = !hasRows ? '' : `
     <div class="turns-wrap open" id="body-${s.session_number}">
       <table>
         <thead><tr>
           <th style="width:36px;">#</th><th style="width:160px;">Latency</th>
-          <th>Transcript</th><th style="width:88px;">Full resp.</th>
+          <th>Transcript</th><th style="width:132px;">Endpoint</th><th style="width:88px;">Full resp.</th>
         </tr></thead>
-        <tbody>${s.flagged_turns.map(t => buildTurnRow(t, maxMs)).join('')}</tbody>
+        <tbody>${rows.map(t => buildTurnRow(t, maxMs)).join('')}</tbody>
       </table>
     </div>`;
 
@@ -336,6 +405,7 @@ function buildTurnRow(t, maxMs) {
         <div class="txu"><b>User</b>&nbsp; ${userText}</div>
         <div class="txb"><b>Bot&nbsp;</b>&nbsp; ${botText}</div>
       </td>
+      <td class="fms">${esc(t.endpoint_name || t.endpoint_id || t.trace_id || '')}</td>
       <td class="fms">${fmt(t.full_response_ms)}</td>
     </tr>`;
 }
@@ -350,15 +420,11 @@ function tog(num) {
 
 function downloadCsv() {
   if (!LAST_DATA) return;
-  const head = ['session_number','session_id','turn_number','tier','first_token_latency_ms','full_response_latency_ms','user_text_length','bot_output_segments','user_text','first_bot_text'];
+  const head = ['session_number','session_id','turn_number','trace_id','endpoint_id','endpoint_name','inbound_time','tier','first_token_latency_ms','full_response_latency_ms','user_text_length','bot_output_segments','user_text','first_bot_text'];
   const rows = [head.join(',')];
   for (const s of LAST_DATA.sessions) {
-    for (const t of s.flagged_turns.length ? s.flagged_turns : []) {
+    for (const t of s.turns || []) {
       pushRow(rows, s, t);
-    }
-    if (!s.flagged_turns.length) {
-      // green session has no per-turn detail; emit a session-summary row
-      rows.push([s.session_number, q(s.session_id), '', s.tier, s.avg_latency_ms, '', '', '', '', ''].join(','));
     }
   }
   const blob = new Blob([rows.join('\n')], {type: 'text/csv'});
@@ -370,7 +436,7 @@ function downloadCsv() {
 }
 function q(s) { return '"' + String(s).replace(/"/g,'""') + '"'; }
 function pushRow(rows, s, t) {
-  rows.push([s.session_number, q(s.session_id), t.turn_number, t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
+  rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id), q(t.endpoint_name), q(t.inbound_time), t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
 }
 </script>
 </body>
