@@ -16,7 +16,7 @@ import os
 
 from flask import Flask, request, jsonify, Response
 
-from _core import compute, CognigyError
+from _core import compute, fetch_endpoints, CognigyError
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +38,25 @@ def latency():
         return jsonify({"error": e.message}), status
     except Exception:  # noqa: BLE001
         app.logger.exception("Unhandled /api/latency error")
+        return jsonify({"error": "Unexpected server error."}), 500
+
+
+@app.post("/api/endpoints")
+def endpoints():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({
+            "endpoints": fetch_endpoints(
+                base_url=payload.get("base_url", ""),
+                api_key=payload.get("api_key", ""),
+                project_id=payload.get("project_id", ""),
+            )
+        })
+    except CognigyError as e:
+        status = 200 if e.status == 200 else e.status
+        return jsonify({"error": e.message}), status
+    except Exception:  # noqa: BLE001
+        app.logger.exception("Unhandled /api/endpoints error")
         return jsonify({"error": "Unexpected server error."}), 500
 
 

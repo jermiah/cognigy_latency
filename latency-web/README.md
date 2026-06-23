@@ -36,13 +36,15 @@ the last output segment for that same trace.
 
 ## Filters
 
-The dashboard fetches project logs and builds the full VoiceGateway2 report
-first. Filters are then applied locally to the generated report so a narrow
-date, endpoint, or session search cannot prevent the base report from being
-created. Available filters:
+The dashboard can load project endpoints from Cognigy and sends date plus
+selected endpoint filters into the initial log request before pagination. This
+keeps large historical reports from fetching unnecessary logs. After the
+filtered log set is loaded, the remaining report filters are applied locally.
+Available filters:
 
-- Date from / date to
-- Endpoint name, endpoint ID, or trace prefix
+- Date from / date to — sent to Cognigy before logs are fetched
+- Cognigy endpoint — loaded from Cognigy and sent before logs are fetched
+- Endpoint text search — local search inside the loaded report
 - Session ID search
 - Trace ID search
 - User/bot transcript text search

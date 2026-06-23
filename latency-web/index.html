@@ -41,6 +41,7 @@
   .checkline { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
   .checkline input { width: 16px; height: 16px; accent-color: var(--accent); }
   .checkline label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+  .inline-control { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
   .actions { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
   button.run {
     font-family: var(--sans); font-size: 13px; font-weight: 500; color: #fff; background: var(--accent);
@@ -172,17 +173,27 @@
         <div class="field">
           <label for="date_from">Date from</label>
           <input id="date_from" name="date_from" type="date">
-          <span class="hint">Filters by caller turn timestamp.</span>
+          <span class="hint">Sent to Cognigy before logs are fetched.</span>
         </div>
         <div class="field">
           <label for="date_to">Date to</label>
           <input id="date_to" name="date_to" type="date">
-          <span class="hint">Inclusive end date.</span>
+          <span class="hint">Inclusive end date, sent to Cognigy.</span>
+        </div>
+        <div class="field full">
+          <label for="endpoint_id">Cognigy endpoint</label>
+          <div class="inline-control">
+            <select id="endpoint_id" name="endpoint_id">
+              <option value="">All endpoints</option>
+            </select>
+            <button class="dl" id="loadEndpointsBtn" type="button">Load endpoints</button>
+          </div>
+          <span class="hint">Loaded from Cognigy and sent to the logs API before pagination.</span>
         </div>
         <div class="field">
-          <label for="endpoint">Endpoint filter</label>
+          <label for="endpoint">Endpoint text search</label>
           <input id="endpoint" name="endpoint" type="text" placeholder="Endpoint name, ID, or trace prefix">
-          <span class="hint">Leave empty to include all VG2 endpoints.</span>
+          <span class="hint">Local search inside the loaded report.</span>
         </div>
         <div class="field">
           <label for="session_id">Session ID search</label>
@@ -246,6 +257,8 @@ let LAST_DATA = null;
 const form    = document.getElementById('cfg');
 const runBtn  = document.getElementById('runBtn');
 const statusEl = document.getElementById('status');
+const endpointSelect = document.getElementById('endpoint_id');
+const loadEndpointsBtn = document.getElementById('loadEndpointsBtn');
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -255,6 +268,9 @@ form.addEventListener('submit', async (e) => {
     project_id: document.getElementById('project_id').value,
     api_key:    document.getElementById('api_key').value,
     limit:      parseInt(document.getElementById('limit').value, 10),
+    date_from:  document.getElementById('date_from').value,
+    date_to:    document.getElementById('date_to').value,
+    endpoint_id: endpointSelect.value,
   };
   if (!payload.base_url || !payload.project_id || !payload.api_key) {
     setStatus('Base URL, Project ID and API key are all required.', true);
@@ -285,7 +301,9 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-for (const id of ['date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
+loadEndpointsBtn.addEventListener('click', loadEndpoints);
+
+for (const id of ['date_from','date_to','endpoint_id','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
   document.getElementById(id).addEventListener('input', applyFilters);
   document.getElementById(id).addEventListener('change', applyFilters);
 }
@@ -309,6 +327,7 @@ function filterSettings() {
   return {
     date_from: document.getElementById('date_from').value,
     date_to: document.getElementById('date_to').value,
+    endpoint_id: endpointSelect.value.trim().toLowerCase(),
     endpoint: document.getElementById('endpoint').value.trim().toLowerCase(),
     session_id: document.getElementById('session_id').value.trim().toLowerCase(),
     trace_id: document.getElementById('trace_id').value.trim().toLowerCase(),
@@ -412,6 +431,42 @@ function applyFilters() {
   LAST_DATA = filtered;
   setStatus('Full report generated — showing ' + filtered.total_turns + ' of ' + LAST_FULL_DATA.total_turns + ' turns across ' + filtered.total_sessions + ' session(s).', false);
   build(filtered);
+}
+
+async function loadEndpoints() {
+  const payload = {
+    base_url: document.getElementById('base_url').value,
+    project_id: document.getElementById('project_id').value,
+    api_key: document.getElementById('api_key').value,
+  };
+  if (!payload.base_url || !payload.project_id || !payload.api_key) {
+    setStatus('Base URL, Project ID and API key are required before loading endpoints.', true);
+    return;
+  }
+  loadEndpointsBtn.disabled = true;
+  setStatus('<span class="spinner"></span>Loading endpoints from Cognigy…', false);
+  try {
+    const res = await fetch('/api/endpoints', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      setStatus(data.error || ('Endpoint request failed (' + res.status + ').'), true);
+      return;
+    }
+    const endpoints = data.endpoints || [];
+    endpointSelect.innerHTML = '<option value="">All endpoints</option>' + endpoints.map(e => {
+      const label = [e.name, e.type].filter(Boolean).join(' · ');
+      return `<option value="${esc(e.id)}">${esc(label || e.id)}</option>`;
+    }).join('');
+    setStatus('Loaded ' + endpoints.length + ' endpoint(s). Select one, then click Calculate latency.', false);
+  } catch (err) {
+    setStatus('Network error — could not load endpoints.', true);
+  } finally {
+    loadEndpointsBtn.disabled = false;
+  }
 }
 
 function build(D) {

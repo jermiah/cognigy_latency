@@ -59,7 +59,7 @@ def _extract_items(data):
     if isinstance(data, list):
         return data
     embedded = data.get("_embedded", {})
-    for key in ("logEntry", "logs", "items", "data"):
+    for key in ("logEntry", "logs", "items", "data", "endpoints", "endpoint"):
         value = embedded.get(key) if key in embedded else data.get(key)
         if isinstance(value, list):
             return value
@@ -109,14 +109,123 @@ def _request_json(url, headers, params):
     return data
 
 
-def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) -> list:
+def _clean_base_url(base_url: str) -> str:
+    base_url = (base_url or "").strip().rstrip("/")
+    if base_url.endswith("/openapi"):
+        base_url = base_url[: -len("/openapi")]
+    return base_url
+
+
+def _auth_candidates(api_key: str):
+    return [
+        ("X-API-Key", {"X-API-Key": api_key}),
+        ("Bearer", {"Authorization": f"Bearer {api_key}"}),
+        ("Token", {"Authorization": api_key}),
+    ]
+
+
+def _iso_date(value: str, end_of_day: bool = False) -> str:
+    dt = parse_date_boundary(value, end_of_day=end_of_day)
+    if not dt:
+        return ""
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _with_filters(params: dict, date_from: str = "", date_to: str = "", endpoint_id: str = "") -> dict:
+    params = dict(params)
+    if date_from:
+        params["from"] = _iso_date(date_from)
+        params["startDate"] = _iso_date(date_from)
+    if date_to:
+        params["to"] = _iso_date(date_to, end_of_day=True)
+        params["endDate"] = _iso_date(date_to, end_of_day=True)
+    if endpoint_id:
+        params["endpointId"] = endpoint_id
+        params["endpointReference"] = endpoint_id
+    return {k: v for k, v in params.items() if v not in ("", None)}
+
+
+def _endpoint_value(item: dict, names) -> str:
+    for name in names:
+        value = first_matching_value(item, {name.lower()})
+        if value:
+            return value
+    return ""
+
+
+def fetch_endpoints(base_url: str, api_key: str, project_id: str) -> list:
+    """Fetch project endpoints for the endpoint dropdown."""
+    base_url = _clean_base_url(base_url)
+    if not base_url:
+        raise CognigyError("Base URL is required.")
+    if not api_key:
+        raise CognigyError("API key is required.")
+    if not project_id:
+        raise CognigyError("Project ID is required.")
+
+    url_candidates = [
+        (f"{base_url}/v2.0/projects/{project_id}/endpoints", {"limit": 100}),
+        (f"{base_url}/new/v2.0/endpoints", {"limit": 100, "projectId": project_id}),
+    ]
+    last_error = None
+
+    for _, headers in _auth_candidates(api_key):
+        for start_url, params in url_candidates:
+            try:
+                data = _request_json(start_url, headers, params)
+            except CognigyError as e:
+                last_error = e
+                if e.status == 429:
+                    raise
+                continue
+
+            endpoints = []
+            for item in _extract_items(data):
+                if not isinstance(item, dict):
+                    continue
+                endpoint_id = _endpoint_value(
+                    item,
+                    ("_id", "id", "endpointId", "endpoint_id", "referenceId", "endpointReference"),
+                )
+                name = _endpoint_value(
+                    item,
+                    ("name", "displayName", "endpointName", "urlName", "slug"),
+                )
+                type_name = _endpoint_value(item, ("type", "channel", "endpointType"))
+                if endpoint_id or name:
+                    endpoints.append({
+                        "id": endpoint_id or name,
+                        "name": name or endpoint_id,
+                        "type": type_name,
+                    })
+            if endpoints:
+                return sorted(endpoints, key=lambda e: (e["name"] or "").lower())
+
+    if last_error:
+        if last_error.status == 401:
+            raise CognigyError(
+                "Authentication failed (401) while loading endpoints. Check that "
+                "the API key belongs to this NICE/Cognigy tenant.",
+                401,
+            )
+        raise last_error
+    return []
+
+
+def fetch_logs(
+    base_url: str,
+    api_key: str,
+    project_id: str,
+    limit: int = 2000,
+    date_from: str = "",
+    date_to: str = "",
+    endpoint_id: str = "",
+) -> list:
     """
     Fetch log entries from the Cognigy Logs API, paginating automatically.
     limit == 0 means fetch everything. Raises CognigyError on any failure.
     """
-    base_url = (base_url or "").strip().rstrip("/")
-    if base_url.endswith("/openapi"):
-        base_url = base_url[: -len("/openapi")]
+    base_url = _clean_base_url(base_url)
 
     if not base_url:
         raise CognigyError("Base URL is required.")
@@ -128,18 +237,17 @@ def fetch_logs(base_url: str, api_key: str, project_id: str, limit: int = 2000) 
     all_items = []
     page_size = 25
     unlimited = (limit == 0)
-    auth_candidates = [
-        ("X-API-Key", {"X-API-Key": api_key}),
-        ("Bearer", {"Authorization": f"Bearer {api_key}"}),
-        ("Token", {"Authorization": api_key}),
-    ]
     url_candidates = [
-        ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", {"limit": page_size}),
-        ("nice", f"{base_url}/new/v2.0/logs", {"limit": page_size, "projectId": project_id}),
+        ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
+            {"limit": page_size}, date_from, date_to, endpoint_id,
+        )),
+        ("nice", f"{base_url}/new/v2.0/logs", _with_filters(
+            {"limit": page_size, "projectId": project_id}, date_from, date_to, endpoint_id,
+        )),
     ]
     last_error = None
 
-    for _, headers in auth_candidates:
+    for _, headers in _auth_candidates(api_key):
         for _, start_url, start_params in url_candidates:
             current_url = start_url
             current_params = start_params
@@ -530,6 +638,9 @@ def compute(payload: dict) -> dict:
         api_key=payload.get("api_key", ""),
         project_id=payload.get("project_id", ""),
         limit=limit,
+        date_from=payload.get("date_from", ""),
+        date_to=payload.get("date_to", ""),
+        endpoint_id=payload.get("endpoint_id", ""),
     )
     all_turns = analyze_turns(items)
     filters = {
