@@ -271,6 +271,7 @@ form.addEventListener('submit', async (e) => {
     date_from:  document.getElementById('date_from').value,
     date_to:    document.getElementById('date_to').value,
     endpoint_id: endpointSelect.value,
+    endpoint_label: endpointSelect.value ? endpointSelect.selectedOptions[0]?.textContent || '' : '',
   };
   if (!payload.base_url || !payload.project_id || !payload.api_key) {
     setStatus('Base URL, Project ID and API key are all required.', true);
@@ -581,7 +582,7 @@ function buildTurnRow(t, maxMs) {
         <div class="txu"><b>User</b>&nbsp; ${userText}</div>
         <div class="txb"><b>Bot&nbsp;</b>&nbsp; ${botText}</div>
       </td>
-      <td class="fms">${esc(t.endpoint_name || t.endpoint_id || t.trace_id || '')}</td>
+      <td class="fms">${esc(endpointDisplay(t))}</td>
       <td class="fms">${fmt(t.full_response_ms)}</td>
     </tr>`;
 }
@@ -657,7 +658,7 @@ function reportTurnsHtml(D) {
             <td>${esc(t.tier_label || t.tier)}</td>
             <td>${t.first_token_ms}</td>
             <td>${t.full_response_ms}</td>
-            <td>${esc(t.endpoint_name || t.endpoint_id || '')}</td>
+            <td>${esc(endpointDisplay(t, D))}</td>
             <td>${esc(t.trace_id || '')}</td>
             <td>${esc(t.user_text || '')}</td>
             <td>${esc(t.first_bot_text || '')}</td>
@@ -723,9 +724,13 @@ function downloadPdf() {
   win.document.close();
 }
 
+function endpointDisplay(t, D = LAST_DATA) {
+  return t.endpoint_name || t.endpoint_id || D?.selected_endpoint_name || D?.selected_endpoint_id || t.trace_id || 'Not provided in log';
+}
+
 function q(s) { return '"' + String(s).replace(/"/g,'""') + '"'; }
 function pushRow(rows, s, t) {
-  rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id), q(t.endpoint_name), q(t.inbound_time), t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
+  rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id || LAST_DATA?.selected_endpoint_id || ''), q(t.endpoint_name || LAST_DATA?.selected_endpoint_name || endpointDisplay(t)), q(t.inbound_time), t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
 }
 </script>
 </body>

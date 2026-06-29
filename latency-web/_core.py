@@ -542,6 +542,8 @@ def filter_turns(turns: list, filters: dict) -> list:
 
 def build_dashboard_data(turns: list, project_name: str, filters: dict) -> dict:
     """Turn the per-turn list into the JSON structure the frontend renders."""
+    selected_endpoint_id = (filters.get("endpoint_id") or "").strip()
+    selected_endpoint_name = (filters.get("endpoint_label") or "").strip()
     sessions_map = defaultdict(list)
     for t in turns:
         sessions_map[t["session_id"]].append(t)
@@ -565,8 +567,8 @@ def build_dashboard_data(turns: list, project_name: str, filters: dict) -> dict:
             out_turns.append({
                 "turn_number":         t_num,
                 "trace_id":            t.get("trace_id", ""),
-                "endpoint_id":         t.get("endpoint_id", ""),
-                "endpoint_name":       t.get("endpoint_name", ""),
+                "endpoint_id":         t.get("endpoint_id", "") or selected_endpoint_id,
+                "endpoint_name":       t.get("endpoint_name", "") or selected_endpoint_name,
                 "inbound_time":        t.get("inbound_time", ""),
                 "first_token_ms":      ms,
                 "full_response_ms":    t["full_response_latency_ms"],
@@ -617,6 +619,8 @@ def build_dashboard_data(turns: list, project_name: str, filters: dict) -> dict:
         "green_max_ms":   GREEN_MAX,
         "yellow_max_ms":  YELLOW_MAX,
         "filters":        filters,
+        "selected_endpoint_id": selected_endpoint_id,
+        "selected_endpoint_name": selected_endpoint_name,
         "sessions":       session_data,
     }
 
@@ -646,6 +650,8 @@ def compute(payload: dict) -> dict:
     filters = {
         "date_from":       payload.get("date_from", ""),
         "date_to":         payload.get("date_to", ""),
+        "endpoint_id":     payload.get("endpoint_id", ""),
+        "endpoint_label":  payload.get("endpoint_label", ""),
         "endpoint":        payload.get("endpoint", ""),
         "session_id":      payload.get("session_id", ""),
         "trace_id":        payload.get("trace_id", ""),
