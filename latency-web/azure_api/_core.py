@@ -162,6 +162,14 @@ def _with_filters(
             params["timestampFrom"] = start
         if end:
             params["timestampTo"] = end
+    elif date_style == "odata_timestamp":
+        clauses = []
+        if start:
+            clauses.append(f"timestamp gt '{start}'")
+        if end:
+            clauses.append(f"timestamp lt '{end}'")
+        if clauses:
+            params["$filter"] = " and ".join(clauses)
     if endpoint_id:
         params[endpoint_style] = endpoint_id
     return {k: v for k, v in params.items() if v not in ("", None)}
@@ -169,7 +177,13 @@ def _with_filters(
 
 def _filter_variants(date_from: str, date_to: str, endpoint_id: str):
     has_date = bool(date_from or date_to)
-    date_styles = ("from_to", "start_end", "date_from_to", "timestamp_from_to") if has_date else ("from_to",)
+    date_styles = (
+        "odata_timestamp",
+        "from_to",
+        "start_end",
+        "date_from_to",
+        "timestamp_from_to",
+    ) if has_date else ("from_to",)
     endpoint_styles = ("endpointId", "endpointReference", "endpoint")
     if endpoint_id:
         for endpoint_style in endpoint_styles:
@@ -178,6 +192,29 @@ def _filter_variants(date_from: str, date_to: str, endpoint_id: str):
     if has_date or not endpoint_id:
         for date_style in date_styles:
             yield date_style, "", ""
+
+
+def _items_overlap_date_filter(items: list, date_from: str = "", date_to: str = "") -> bool:
+    if not (date_from or date_to):
+        return True
+    start = parse_date_boundary(date_from or "")
+    end = parse_date_boundary(date_to or "", end_of_day=True)
+    saw_dated_item = False
+    for item in items:
+        timestamp = item.get("timestamp") if isinstance(item, dict) else ""
+        if not timestamp:
+            continue
+        try:
+            dt = parse_ts(timestamp)
+        except (TypeError, ValueError):
+            continue
+        saw_dated_item = True
+        if start and dt < start:
+            continue
+        if end and dt > end:
+            continue
+        return True
+    return not saw_dated_item
 
 
 def _endpoint_value(item: dict, names) -> str:
@@ -269,14 +306,13 @@ def fetch_logs(
     if not project_id:
         raise CognigyError("Project ID is required.")
 
-    all_items = []
     page_size = 25
     unlimited = (limit == 0)
     last_error = None
     saw_successful_response = False
+    ignored_date_items = []
 
     for date_style, endpoint_style, endpoint_value in _filter_variants(date_from, date_to, endpoint_id):
-        variant_had_success = False
         url_candidates = [
             ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
                 {"limit": page_size}, date_from, date_to, endpoint_value, date_style, endpoint_style or "endpointId",
@@ -287,21 +323,25 @@ def fetch_logs(
         ]
 
         for _, headers in _auth_candidates(api_key):
-            if variant_had_success:
-                break
             for _, start_url, start_params in url_candidates:
-                if variant_had_success:
-                    break
                 current_url = start_url
                 current_params = start_params
                 all_items = []
+                first_page_checked = False
 
                 try:
                     while True:
                         data = _request_json(current_url, headers, current_params)
                         saw_successful_response = True
-                        variant_had_success = True
                         items = _extract_items(data)
+                        if (
+                            items
+                            and not first_page_checked
+                            and not _items_overlap_date_filter(items, date_from, date_to)
+                        ):
+                            ignored_date_items = items
+                            break
+                        first_page_checked = True
                         all_items.extend(items)
 
                         next_href = _next_link(data)
@@ -325,12 +365,20 @@ def fetch_logs(
                     continue
 
                 if all_items:
+                    if not _items_overlap_date_filter(all_items, date_from, date_to):
+                        ignored_date_items = all_items
+                        continue
                     if not unlimited:
                         all_items = all_items[:limit]
                     all_items.sort(key=lambda x: x.get("timestamp", ""))
                     return all_items
 
     if saw_successful_response:
+        if ignored_date_items:
+            if not unlimited:
+                ignored_date_items = ignored_date_items[:limit]
+            ignored_date_items.sort(key=lambda x: x.get("timestamp", ""))
+            return ignored_date_items
         return []
 
     if last_error:
@@ -343,8 +391,7 @@ def fetch_logs(
             )
         raise last_error
 
-    all_items.sort(key=lambda x: x.get("timestamp", ""))
-    return all_items
+    return []
 
 
 # ── Filtering, grouping, latency ──────────────────────────────────────────────
@@ -501,6 +548,27 @@ def diagnostics(items: list, all_turns: list, filters: dict, limit=None) -> str:
             parts.append(f"Complete turns are dated {start}.")
         else:
             parts.append(f"Complete turns range from {start} to {end}.")
+        requested_start = parse_date_boundary(filters.get("date_from") or "")
+        requested_end = parse_date_boundary(filters.get("date_to") or "", end_of_day=True)
+        if requested_start or requested_end:
+            has_requested_turn = False
+            for turn in all_turns:
+                try:
+                    inbound_dt = parse_ts(turn["inbound_time"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if requested_start and inbound_dt < requested_start:
+                    continue
+                if requested_end and inbound_dt > requested_end:
+                    continue
+                has_requested_turn = True
+                break
+            if not has_requested_turn:
+                parts.append(
+                    "The fetched logs are outside the requested date range, so "
+                    "Cognigy likely ignored that date-filter style and returned "
+                    "recent logs instead."
+                )
     active = []
     for label, key in (
         ("date from", "date_from"),
