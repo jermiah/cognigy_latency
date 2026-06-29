@@ -158,7 +158,11 @@
         <div class="field">
           <label for="api_key">API key</label>
           <input id="api_key" name="api_key" type="password" placeholder="••••••••••••">
-          <span class="hint">My Profile → API Keys. Sent over HTTPS, never stored.</span>
+          <span class="hint">Sent over HTTPS. Stored only if you enable the checkbox below.</span>
+        </div>
+        <div class="field checkline">
+          <input id="remember_api_key" name="remember_api_key" type="checkbox">
+          <label for="remember_api_key">Remember API key on this browser</label>
         </div>
         <div class="field">
           <label for="limit">Log entries to fetch</label>
@@ -259,6 +263,16 @@ const runBtn  = document.getElementById('runBtn');
 const statusEl = document.getElementById('status');
 const endpointSelect = document.getElementById('endpoint_id');
 const loadEndpointsBtn = document.getElementById('loadEndpointsBtn');
+const STORAGE_KEY = 'vg2LatencyForm.v1';
+
+restoreForm();
+for (const id of ['name','base_url','project_id','api_key','remember_api_key','limit','date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
+  document.getElementById(id).addEventListener('input', saveForm);
+  document.getElementById(id).addEventListener('change', saveForm);
+}
+document.getElementById('remember_api_key').addEventListener('change', () => {
+  if (!document.getElementById('remember_api_key').checked) saveForm();
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -293,6 +307,7 @@ form.addEventListener('submit', async (e) => {
       setStatus(data.error || ('Request failed (' + res.status + ').'), true);
     } else {
       LAST_FULL_DATA = data;
+      saveForm();
       applyFilters();
     }
   } catch (err) {
@@ -309,9 +324,54 @@ for (const id of ['date_from','date_to','endpoint_id','endpoint','session_id','t
   document.getElementById(id).addEventListener('change', applyFilters);
 }
 
+endpointSelect.addEventListener('change', saveForm);
+
 function setStatus(html, isErr) {
   statusEl.className = 'status' + (isErr ? ' err' : '');
   statusEl.innerHTML = html;
+}
+
+function saveForm() {
+  const rememberKey = document.getElementById('remember_api_key').checked;
+  const data = {
+    name: document.getElementById('name').value,
+    base_url: document.getElementById('base_url').value,
+    project_id: document.getElementById('project_id').value,
+    limit: document.getElementById('limit').value,
+    date_from: document.getElementById('date_from').value,
+    date_to: document.getElementById('date_to').value,
+    endpoint: document.getElementById('endpoint').value,
+    endpoint_id: endpointSelect.value,
+    endpoint_options: Array.from(endpointSelect.options).map(o => ({value: o.value, text: o.textContent})),
+    session_id: document.getElementById('session_id').value,
+    trace_id: document.getElementById('trace_id').value,
+    text: document.getElementById('text').value,
+    tier: document.getElementById('tier').value,
+    min_latency_ms: document.getElementById('min_latency_ms').value,
+    max_latency_ms: document.getElementById('max_latency_ms').value,
+    show_all_turns: document.getElementById('show_all_turns').checked,
+    remember_api_key: rememberKey,
+    api_key: rememberKey ? document.getElementById('api_key').value : '',
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function restoreForm() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    for (const id of ['name','base_url','project_id','limit','date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms']) {
+      if (data[id] !== undefined) document.getElementById(id).value = data[id];
+    }
+    document.getElementById('show_all_turns').checked = !!data.show_all_turns;
+    document.getElementById('remember_api_key').checked = !!data.remember_api_key;
+    if (data.remember_api_key && data.api_key) document.getElementById('api_key').value = data.api_key;
+    if (Array.isArray(data.endpoint_options) && data.endpoint_options.length) {
+      endpointSelect.innerHTML = data.endpoint_options.map(o => `<option value="${esc(o.value)}">${esc(o.text)}</option>`).join('');
+      endpointSelect.value = data.endpoint_id || '';
+    }
+  } catch (err) {
+    localStorage.removeItem(STORAGE_KEY);
+  }
 }
 
 function getTier(ms) {
@@ -462,6 +522,7 @@ async function loadEndpoints() {
       const label = [e.name, e.type].filter(Boolean).join(' · ');
       return `<option value="${esc(e.id)}">${esc(label || e.id)}</option>`;
     }).join('');
+    saveForm();
     setStatus('Loaded ' + endpoints.length + ' endpoint(s). Select one, then click Calculate latency.', false);
   } catch (err) {
     setStatus('Network error — could not load endpoints.', true);
