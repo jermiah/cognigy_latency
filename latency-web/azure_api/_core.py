@@ -607,8 +607,21 @@ def diagnostics(items: list, all_turns: list, filters: dict, limit=None) -> str:
     return " ".join(parts)
 
 
+def _query_terms(value) -> list:
+    if isinstance(value, list):
+        values = value
+    else:
+        values = str(value or "").replace(",", " ").replace(";", " ").split()
+    terms = []
+    for value in values:
+        term = str(value or "").strip().lower()
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
 def filter_turns(turns: list, filters: dict) -> list:
-    session_q = (filters.get("session_id") or "").strip().lower()
+    session_terms = _query_terms(filters.get("session_ids") or filters.get("session_id"))
     endpoint_q = (filters.get("endpoint") or "").strip().lower()
     trace_q = (filters.get("trace_id") or "").strip().lower()
     text_q = (filters.get("text") or "").strip().lower()
@@ -632,7 +645,7 @@ def filter_turns(turns: list, filters: dict) -> list:
             continue
         if date_to and inbound_dt > date_to:
             continue
-        if session_q and session_q not in turn.get("session_id", "").lower():
+        if session_terms and not any(q in turn.get("session_id", "").lower() for q in session_terms):
             continue
         endpoint_blob = " ".join([
             turn.get("endpoint_id", ""),
@@ -776,6 +789,7 @@ def compute(payload: dict) -> dict:
         "endpoint_label":  payload.get("endpoint_label", ""),
         "endpoint":        payload.get("endpoint", ""),
         "session_id":      payload.get("session_id", ""),
+        "session_ids":     payload.get("session_ids", []),
         "trace_id":        payload.get("trace_id", ""),
         "text":            payload.get("text", ""),
         "tier":            payload.get("tier", "all"),

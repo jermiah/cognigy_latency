@@ -38,6 +38,30 @@
   }
   .field input:focus, .field select:focus { outline: none; border-color: var(--text-3); background: #fff; }
   .field .hint { font-size: 10px; color: var(--text-3); }
+  .tag-input {
+    min-height: 38px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    padding: 5px 7px; border: 1px solid var(--border); border-radius: var(--rad);
+    background: var(--bg); color: var(--text);
+  }
+  .tag-input:focus-within { border-color: var(--text-3); background: #fff; }
+  .tag-input input {
+    min-width: 190px; flex: 1 1 160px; border: 0; background: transparent;
+    padding: 4px; font-size: 13px;
+  }
+  .tag-input input:focus { outline: none; border-color: transparent; background: transparent; }
+  .tag-chip {
+    display: inline-flex; align-items: center; max-width: 100%; gap: 6px;
+    padding: 4px 7px; border: 1px solid var(--border); border-radius: 999px;
+    background: #fff; color: var(--text-2); font-family: var(--mono); font-size: 10px;
+  }
+  .tag-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #session_tags { display: contents; }
+  .tag-remove {
+    width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; background: var(--border); color: var(--text-2);
+    cursor: pointer; line-height: 1; font-size: 12px; padding: 0;
+  }
+  .tag-remove:hover { background: #d4d1c8; color: var(--text); }
   .checkline { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
   .checkline input { width: 16px; height: 16px; accent-color: var(--accent); }
   .checkline label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
@@ -204,8 +228,11 @@
         </div>
         <div class="field">
           <label for="session_id">Session ID search</label>
-          <input id="session_id" name="session_id" type="text" placeholder="Paste a full or partial session ID">
-          <span class="hint">Matches partial session IDs.</span>
+          <div class="tag-input" id="sessionTagBox">
+            <div id="session_tags"></div>
+            <input id="session_id" name="session_id" type="text" placeholder="Paste session ID, then press Enter">
+          </div>
+          <span class="hint">Press Enter to add each full or partial session ID. Matching uses any tag.</span>
         </div>
         <div class="field">
           <label for="trace_id">Trace ID search</label>
@@ -266,7 +293,10 @@ const runBtn  = document.getElementById('runBtn');
 const statusEl = document.getElementById('status');
 const endpointSelect = document.getElementById('endpoint_id');
 const loadEndpointsBtn = document.getElementById('loadEndpointsBtn');
+const sessionInput = document.getElementById('session_id');
+const sessionTagsEl = document.getElementById('session_tags');
 const STORAGE_KEY = 'vg2LatencyForm.v1';
+let SESSION_IDS = [];
 
 restoreForm();
 for (const id of ['name','base_url','project_id','api_key','remember_api_key','limit','date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
@@ -275,6 +305,39 @@ for (const id of ['name','base_url','project_id','api_key','remember_api_key','l
 }
 document.getElementById('remember_api_key').addEventListener('change', () => {
   if (!document.getElementById('remember_api_key').checked) saveForm();
+});
+
+sessionInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    addSessionIdsFromText(sessionInput.value);
+  } else if (e.key === 'Backspace' && !sessionInput.value && SESSION_IDS.length) {
+    SESSION_IDS.pop();
+    renderSessionTags();
+    saveForm();
+    applyFilters();
+  }
+});
+
+sessionInput.addEventListener('paste', (e) => {
+  const text = e.clipboardData?.getData('text') || '';
+  if (/[\s,;]+/.test(text.trim())) {
+    e.preventDefault();
+    addSessionIdsFromText(text);
+  }
+});
+
+sessionTagsEl.addEventListener('click', (e) => {
+  const button = e.target.closest('.tag-remove');
+  if (!button) return;
+  const idx = Number(button.dataset.index);
+  if (!Number.isNaN(idx)) {
+    SESSION_IDS.splice(idx, 1);
+    renderSessionTags();
+    saveForm();
+    applyFilters();
+    sessionInput.focus();
+  }
 });
 
 form.addEventListener('submit', async (e) => {
@@ -334,6 +397,43 @@ function setStatus(html, isErr) {
   statusEl.innerHTML = html;
 }
 
+function normaliseSessionToken(value) {
+  return String(value || '').trim();
+}
+
+function addSessionIdsFromText(text) {
+  const tokens = String(text || '').split(/[\s,;]+/).map(normaliseSessionToken).filter(Boolean);
+  let changed = false;
+  for (const token of tokens) {
+    const exists = SESSION_IDS.some(v => v.toLowerCase() === token.toLowerCase());
+    if (!exists) {
+      SESSION_IDS.push(token);
+      changed = true;
+    }
+  }
+  sessionInput.value = '';
+  if (changed) {
+    renderSessionTags();
+    saveForm();
+    applyFilters();
+  }
+}
+
+function renderSessionTags() {
+  sessionTagsEl.innerHTML = SESSION_IDS.map((value, idx) => `
+    <span class="tag-chip">
+      <span title="${esc(value)}">${esc(value)}</span>
+      <button class="tag-remove" type="button" data-index="${idx}" aria-label="Remove session ${esc(value)}">×</button>
+    </span>`).join('');
+}
+
+function activeSessionQueries() {
+  const tagged = SESSION_IDS.map(v => v.trim().toLowerCase()).filter(Boolean);
+  if (tagged.length) return tagged;
+  const draft = sessionInput.value.trim().toLowerCase();
+  return draft ? [draft] : [];
+}
+
 function saveForm() {
   const rememberKey = document.getElementById('remember_api_key').checked;
   const data = {
@@ -347,6 +447,7 @@ function saveForm() {
     endpoint_id: endpointSelect.value,
     endpoint_options: Array.from(endpointSelect.options).map(o => ({value: o.value, text: o.textContent})),
     session_id: document.getElementById('session_id').value,
+    session_ids: SESSION_IDS,
     trace_id: document.getElementById('trace_id').value,
     text: document.getElementById('text').value,
     tier: document.getElementById('tier').value,
@@ -372,6 +473,8 @@ function restoreForm() {
       endpointSelect.innerHTML = data.endpoint_options.map(o => `<option value="${esc(o.value)}">${esc(o.text)}</option>`).join('');
       endpointSelect.value = data.endpoint_id || '';
     }
+    SESSION_IDS = Array.isArray(data.session_ids) ? data.session_ids.map(normaliseSessionToken).filter(Boolean) : [];
+    renderSessionTags();
   } catch (err) {
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -388,12 +491,14 @@ function tierLabel(tier) {
 }
 
 function filterSettings() {
+  const sessionIds = activeSessionQueries();
   return {
     date_from: document.getElementById('date_from').value,
     date_to: document.getElementById('date_to').value,
     endpoint_id: endpointSelect.value.trim().toLowerCase(),
     endpoint: document.getElementById('endpoint').value.trim().toLowerCase(),
-    session_id: document.getElementById('session_id').value.trim().toLowerCase(),
+    session_id: sessionIds.join(', '),
+    session_ids: sessionIds,
     trace_id: document.getElementById('trace_id').value.trim().toLowerCase(),
     text: document.getElementById('text').value.trim().toLowerCase(),
     tier: document.getElementById('tier').value,
@@ -407,7 +512,7 @@ function turnMatches(t, s, F) {
   const day = (t.inbound_time || '').slice(0, 10);
   if (F.date_from && day && day < F.date_from) return false;
   if (F.date_to && day && day > F.date_to) return false;
-  if (F.session_id && !String(s.session_id || '').toLowerCase().includes(F.session_id)) return false;
+  if (F.session_ids?.length && !F.session_ids.some(q => String(s.session_id || '').toLowerCase().includes(q))) return false;
   if (F.trace_id && !String(t.trace_id || '').toLowerCase().includes(F.trace_id)) return false;
   const endpointBlob = [t.endpoint_id, t.endpoint_name, t.trace_id].join(' ').toLowerCase();
   if (F.endpoint && !endpointBlob.includes(F.endpoint)) return false;
