@@ -314,6 +314,39 @@ def fetch_endpoints(base_url: str, api_key: str, project_id: str) -> list:
     return []
 
 
+def _fetch_recent_logs_without_dates(
+    base_url: str,
+    api_key: str,
+    project_id: str,
+    limit: int,
+    endpoint_id: str = "",
+) -> list:
+    """Fallback to the original CLI strategy: paginate recent logs without date params."""
+    page_size = 25
+    for _, endpoint_style, endpoint_value in _filter_variants("", "", endpoint_id):
+        url_candidates = [
+            ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
+                {"limit": page_size}, "", "", endpoint_value, "from_to", endpoint_style or "endpointId",
+            )),
+            ("nice", f"{base_url}/new/v2.0/logs", _with_filters(
+                {"limit": page_size, "projectId": project_id}, "", "", endpoint_value, "from_to", endpoint_style or "endpointId",
+            )),
+        ]
+        for _, headers in _auth_candidates(api_key):
+            for _, start_url, start_params in url_candidates:
+                try:
+                    first_data = _request_json(start_url, headers, start_params)
+                    all_items = _collect_log_pages(first_data, headers, limit)
+                except CognigyError as e:
+                    if e.status == 429:
+                        raise
+                    continue
+                if all_items:
+                    all_items.sort(key=lambda x: x.get("timestamp", ""))
+                    return all_items
+    return []
+
+
 def fetch_logs(
     base_url: str,
     api_key: str,
@@ -374,6 +407,10 @@ def fetch_logs(
                     return all_items
 
     if saw_successful_response:
+        if date_from or date_to:
+            recent_items = _fetch_recent_logs_without_dates(base_url, api_key, project_id, limit, endpoint_id)
+            if recent_items:
+                return recent_items
         if ignored_date_candidate:
             headers, first_data = ignored_date_candidate
             ignored_date_items = _collect_log_pages(first_data, headers, limit)
