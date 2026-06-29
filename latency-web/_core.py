@@ -481,10 +481,16 @@ def sample_values(items: list, key_path, limit: int = 8) -> list:
     return seen
 
 
-def diagnostics(items: list, all_turns: list, filters: dict) -> str:
+def diagnostics(items: list, all_turns: list, filters: dict, limit=None) -> str:
     vg2_items = filter_vg2(items)
+    if limit == 0:
+        fetch_label = "matching raw log entries"
+    elif limit:
+        fetch_label = f"most recent matching raw log entries (limit {limit})"
+    else:
+        fetch_label = "raw log entries"
     parts = [
-        f"Fetched {len(items)} raw log entries.",
+        f"Fetched {len(items)} {fetch_label}.",
         f"Found {len(vg2_items)} possible VoiceGateway log entries.",
         f"Built {len(all_turns)} complete latency turn(s) before filters.",
     ]
@@ -714,10 +720,11 @@ def compute(payload: dict) -> dict:
         raise CognigyError(
             "No voiceGateway2 turns matched the current filters. Clear filters, "
             "increase the log limit, or wait 1–2 minutes for new logs to appear. "
-            + diagnostics(items, all_turns, filters),
+            + diagnostics(items, all_turns, filters, limit),
             200,
         )
     data = build_dashboard_data(turns, name, filters)
     data["raw_log_entries"] = len(items)
+    data["log_limit"] = limit
     data["analyzed_turns_before_filters"] = len(all_turns)
     return data

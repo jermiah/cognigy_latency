@@ -170,9 +170,12 @@
             <option value="500">500 raw logs (fast)</option>
             <option value="2000" selected>2000 raw logs (default)</option>
             <option value="5000">5000 raw logs</option>
+            <option value="10000">10000 raw logs</option>
+            <option value="15000">15000 raw logs</option>
+            <option value="20000">20000 raw logs</option>
             <option value="0">All (slowest)</option>
           </select>
-          <span class="hint">Raw Cognigy log records after date/endpoint filters. This is not the number of latency turns.</span>
+          <span class="hint">Most recent matching Cognigy raw logs after date/endpoint filters. Example: 10000 means the latest 10000 matching raw logs, not 10000 latency turns.</span>
         </div>
         <div class="field">
           <label for="date_from">Date from</label>
@@ -573,7 +576,7 @@ function build(D) {
 
     <div class="sess-section">
       <div class="sess-bar">
-        <div class="sec-lbl" style="margin:0;">Sessions · ${D.raw_log_entries || 0} raw logs · ${D.analyzed_turns_before_filters || D.total_turns} VG2 turns before filters</div>
+        <div class="sec-lbl" style="margin:0;">Sessions · ${D.raw_log_entries || 0} ${D.log_limit === 0 ? 'matching raw logs' : 'most recent matching raw logs'} · ${D.analyzed_turns_before_filters || D.total_turns} VG2 turns before filters</div>
         <div class="exports">
           <button class="dl" onclick="downloadPdf()">Download PDF</button>
           <button class="dl" onclick="downloadExcel()">Download Excel</button>
