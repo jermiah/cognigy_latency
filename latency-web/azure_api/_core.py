@@ -246,6 +246,7 @@ def fetch_logs(
         )),
     ]
     last_error = None
+    saw_successful_response = False
 
     for _, headers in _auth_candidates(api_key):
         for _, start_url, start_params in url_candidates:
@@ -256,6 +257,7 @@ def fetch_logs(
             try:
                 while True:
                     data = _request_json(current_url, headers, current_params)
+                    saw_successful_response = True
                     items = _extract_items(data)
                     all_items.extend(items)
 
@@ -284,6 +286,9 @@ def fetch_logs(
                     all_items = all_items[:limit]
                 all_items.sort(key=lambda x: x.get("timestamp", ""))
                 return all_items
+
+    if saw_successful_response:
+        return []
 
     if last_error:
         if last_error.status == 401:

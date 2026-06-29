@@ -163,12 +163,12 @@
         <div class="field">
           <label for="limit">Log entries to fetch</label>
           <select id="limit" name="limit">
-            <option value="500">500 (fast)</option>
-            <option value="2000" selected>2000 (default)</option>
-            <option value="5000">5000</option>
+            <option value="500">500 raw logs (fast)</option>
+            <option value="2000" selected>2000 raw logs (default)</option>
+            <option value="5000">5000 raw logs</option>
             <option value="0">All (slowest)</option>
           </select>
-          <span class="hint">More = longer history but slower.</span>
+          <span class="hint">Raw Cognigy log records after date/endpoint filters. This is not the number of latency turns.</span>
         </div>
         <div class="field">
           <label for="date_from">Date from</label>
