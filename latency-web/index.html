@@ -597,7 +597,7 @@ function tog(num) {
 
 function downloadCsv() {
   if (!LAST_DATA) return;
-  const head = ['session_number','session_id','turn_number','trace_id','endpoint_id','endpoint_name','inbound_time','tier','first_token_latency_ms','full_response_latency_ms','user_text_length','bot_output_segments','user_text','first_bot_text'];
+  const head = ['session_number','session_id','turn_number','trace_id','endpoint_id','endpoint_name','inbound_time','tier','latency','latency_ms','full_response','full_response_ms','user_text_length','bot_output_segments','user_text','first_bot_text'];
   const rows = [head.join(',')];
   for (const s of LAST_DATA.sessions) {
     for (const t of s.turns || []) {
@@ -645,7 +645,7 @@ function reportTurnsHtml(D) {
       <thead>
         <tr>
           <th>Session #</th><th>Session ID</th><th>Turn #</th><th>Inbound time</th><th>Tier</th>
-          <th>First-token latency</th><th>Full response</th><th>Endpoint</th><th>Trace ID</th><th>User text</th><th>First bot text</th>
+          <th>Latency</th><th>Latency ms</th><th>Full response</th><th>Full response ms</th><th>Endpoint</th><th>Trace ID</th><th>User text</th><th>First bot text</th>
         </tr>
       </thead>
       <tbody>
@@ -656,7 +656,9 @@ function reportTurnsHtml(D) {
             <td>${t.turn_number}</td>
             <td>${esc(t.inbound_time || '')}</td>
             <td>${esc(t.tier_label || t.tier)}</td>
+            <td>${fmt(t.first_token_ms)}</td>
             <td>${t.first_token_ms}</td>
+            <td>${fmt(t.full_response_ms)}</td>
             <td>${t.full_response_ms}</td>
             <td>${esc(endpointDisplay(t, D))}</td>
             <td>${esc(t.trace_id || '')}</td>
@@ -730,7 +732,7 @@ function endpointDisplay(t, D = LAST_DATA) {
 
 function q(s) { return '"' + String(s).replace(/"/g,'""') + '"'; }
 function pushRow(rows, s, t) {
-  rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id || LAST_DATA?.selected_endpoint_id || ''), q(t.endpoint_name || LAST_DATA?.selected_endpoint_name || endpointDisplay(t)), q(t.inbound_time), t.tier, t.first_token_ms, t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
+  rows.push([s.session_number, q(s.session_id), t.turn_number, q(t.trace_id), q(t.endpoint_id || LAST_DATA?.selected_endpoint_id || ''), q(t.endpoint_name || LAST_DATA?.selected_endpoint_name || endpointDisplay(t)), q(t.inbound_time), t.tier, q(fmt(t.first_token_ms)), t.first_token_ms, q(fmt(t.full_response_ms)), t.full_response_ms, t.user_text_length, t.bot_output_segments, q(t.user_text), q(t.first_bot_text)].join(','));
 }
 </script>
 </body>
