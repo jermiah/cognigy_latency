@@ -76,6 +76,36 @@ def _next_link(data):
     return ""
 
 
+def _clean_next_url(next_href: str) -> str:
+    parsed = urlparse(next_href)
+    params_qs = parse_qs(parsed.query, keep_blank_values=False)
+    params_qs.pop("previous", None)
+    clean_query = urlencode({k: v[0] for k, v in params_qs.items()})
+    return urlunparse(parsed._replace(scheme="https", query=clean_query))
+
+
+def _collect_log_pages(first_data, headers, limit: int) -> list:
+    all_items = []
+    current_data = first_data
+    unlimited = (limit == 0)
+
+    while True:
+        items = _extract_items(current_data)
+        all_items.extend(items)
+
+        next_href = _next_link(current_data)
+        if not next_href or not items:
+            break
+        if not unlimited and len(all_items) >= limit:
+            break
+
+        current_data = _request_json(_clean_next_url(next_href), headers, None)
+
+    if not unlimited:
+        all_items = all_items[:limit]
+    return all_items
+
+
 def _request_json(url, headers, params):
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=30)
@@ -307,10 +337,9 @@ def fetch_logs(
         raise CognigyError("Project ID is required.")
 
     page_size = 25
-    unlimited = (limit == 0)
     last_error = None
     saw_successful_response = False
-    ignored_date_items = []
+    ignored_date_candidate = None
 
     for date_style, endpoint_style, endpoint_value in _filter_variants(date_from, date_to, endpoint_id):
         url_candidates = [
@@ -324,40 +353,16 @@ def fetch_logs(
 
         for _, headers in _auth_candidates(api_key):
             for _, start_url, start_params in url_candidates:
-                current_url = start_url
-                current_params = start_params
-                all_items = []
-                first_page_checked = False
-
                 try:
-                    while True:
-                        data = _request_json(current_url, headers, current_params)
-                        saw_successful_response = True
-                        items = _extract_items(data)
-                        if (
-                            items
-                            and not first_page_checked
-                            and not _items_overlap_date_filter(items, date_from, date_to)
-                        ):
-                            ignored_date_items = items
-                            break
-                        first_page_checked = True
-                        all_items.extend(items)
+                    first_data = _request_json(start_url, headers, start_params)
+                    saw_successful_response = True
+                    first_items = _extract_items(first_data)
+                    if first_items and not _items_overlap_date_filter(first_items, date_from, date_to):
+                        if ignored_date_candidate is None:
+                            ignored_date_candidate = (headers, first_data)
+                        continue
 
-                        next_href = _next_link(data)
-                        if next_href:
-                            parsed    = urlparse(next_href)
-                            params_qs = parse_qs(parsed.query, keep_blank_values=False)
-                            params_qs.pop("previous", None)
-                            clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
-                            next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
-                            current_url    = next_href
-                            current_params = None
-
-                        if not next_href or not items:
-                            break
-                        if not unlimited and len(all_items) >= limit:
-                            break
+                    all_items = _collect_log_pages(first_data, headers, limit)
                 except CognigyError as e:
                     last_error = e
                     if e.status == 429:
@@ -365,18 +370,13 @@ def fetch_logs(
                     continue
 
                 if all_items:
-                    if not _items_overlap_date_filter(all_items, date_from, date_to):
-                        ignored_date_items = all_items
-                        continue
-                    if not unlimited:
-                        all_items = all_items[:limit]
                     all_items.sort(key=lambda x: x.get("timestamp", ""))
                     return all_items
 
     if saw_successful_response:
-        if ignored_date_items:
-            if not unlimited:
-                ignored_date_items = ignored_date_items[:limit]
+        if ignored_date_candidate:
+            headers, first_data = ignored_date_candidate
+            ignored_date_items = _collect_log_pages(first_data, headers, limit)
             ignored_date_items.sort(key=lambda x: x.get("timestamp", ""))
             return ignored_date_items
         return []
