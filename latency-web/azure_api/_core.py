@@ -131,18 +131,53 @@ def _iso_date(value: str, end_of_day: bool = False) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _with_filters(params: dict, date_from: str = "", date_to: str = "", endpoint_id: str = "") -> dict:
+def _with_filters(
+    params: dict,
+    date_from: str = "",
+    date_to: str = "",
+    endpoint_id: str = "",
+    date_style: str = "from_to",
+    endpoint_style: str = "endpointId",
+) -> dict:
     params = dict(params)
-    if date_from:
-        params["from"] = _iso_date(date_from)
-        params["startDate"] = _iso_date(date_from)
-    if date_to:
-        params["to"] = _iso_date(date_to, end_of_day=True)
-        params["endDate"] = _iso_date(date_to, end_of_day=True)
+    start = _iso_date(date_from)
+    end = _iso_date(date_to, end_of_day=True)
+    if date_style == "from_to":
+        if start:
+            params["from"] = start
+        if end:
+            params["to"] = end
+    elif date_style == "start_end":
+        if start:
+            params["startDate"] = start
+        if end:
+            params["endDate"] = end
+    elif date_style == "date_from_to":
+        if start:
+            params["dateFrom"] = start
+        if end:
+            params["dateTo"] = end
+    elif date_style == "timestamp_from_to":
+        if start:
+            params["timestampFrom"] = start
+        if end:
+            params["timestampTo"] = end
     if endpoint_id:
-        params["endpointId"] = endpoint_id
-        params["endpointReference"] = endpoint_id
+        params[endpoint_style] = endpoint_id
     return {k: v for k, v in params.items() if v not in ("", None)}
+
+
+def _filter_variants(date_from: str, date_to: str, endpoint_id: str):
+    has_date = bool(date_from or date_to)
+    date_styles = ("from_to", "start_end", "date_from_to", "timestamp_from_to") if has_date else ("from_to",)
+    endpoint_styles = ("endpointId", "endpointReference", "endpoint")
+    if endpoint_id:
+        for endpoint_style in endpoint_styles:
+            for date_style in date_styles:
+                yield date_style, endpoint_style, endpoint_id
+    if has_date or not endpoint_id:
+        for date_style in date_styles:
+            yield date_style, "", ""
 
 
 def _endpoint_value(item: dict, names) -> str:
@@ -237,55 +272,63 @@ def fetch_logs(
     all_items = []
     page_size = 25
     unlimited = (limit == 0)
-    url_candidates = [
-        ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
-            {"limit": page_size}, date_from, date_to, endpoint_id,
-        )),
-        ("nice", f"{base_url}/new/v2.0/logs", _with_filters(
-            {"limit": page_size, "projectId": project_id}, date_from, date_to, endpoint_id,
-        )),
-    ]
     last_error = None
     saw_successful_response = False
 
-    for _, headers in _auth_candidates(api_key):
-        for _, start_url, start_params in url_candidates:
-            current_url = start_url
-            current_params = start_params
-            all_items = []
+    for date_style, endpoint_style, endpoint_value in _filter_variants(date_from, date_to, endpoint_id):
+        variant_had_success = False
+        url_candidates = [
+            ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
+                {"limit": page_size}, date_from, date_to, endpoint_value, date_style, endpoint_style or "endpointId",
+            )),
+            ("nice", f"{base_url}/new/v2.0/logs", _with_filters(
+                {"limit": page_size, "projectId": project_id}, date_from, date_to, endpoint_value, date_style, endpoint_style or "endpointId",
+            )),
+        ]
 
-            try:
-                while True:
-                    data = _request_json(current_url, headers, current_params)
-                    saw_successful_response = True
-                    items = _extract_items(data)
-                    all_items.extend(items)
+        for _, headers in _auth_candidates(api_key):
+            if variant_had_success:
+                break
+            for _, start_url, start_params in url_candidates:
+                if variant_had_success:
+                    break
+                current_url = start_url
+                current_params = start_params
+                all_items = []
 
-                    next_href = _next_link(data)
-                    if next_href:
-                        parsed    = urlparse(next_href)
-                        params_qs = parse_qs(parsed.query, keep_blank_values=False)
-                        params_qs.pop("previous", None)
-                        clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
-                        next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
-                        current_url    = next_href
-                        current_params = None
+                try:
+                    while True:
+                        data = _request_json(current_url, headers, current_params)
+                        saw_successful_response = True
+                        variant_had_success = True
+                        items = _extract_items(data)
+                        all_items.extend(items)
 
-                    if not next_href or not items:
-                        break
-                    if not unlimited and len(all_items) >= limit:
-                        break
-            except CognigyError as e:
-                last_error = e
-                if e.status == 429:
-                    raise
-                continue
+                        next_href = _next_link(data)
+                        if next_href:
+                            parsed    = urlparse(next_href)
+                            params_qs = parse_qs(parsed.query, keep_blank_values=False)
+                            params_qs.pop("previous", None)
+                            clean_query    = urlencode({k: v[0] for k, v in params_qs.items()})
+                            next_href      = urlunparse(parsed._replace(scheme="https", query=clean_query))
+                            current_url    = next_href
+                            current_params = None
 
-            if all_items:
-                if not unlimited:
-                    all_items = all_items[:limit]
-                all_items.sort(key=lambda x: x.get("timestamp", ""))
-                return all_items
+                        if not next_href or not items:
+                            break
+                        if not unlimited and len(all_items) >= limit:
+                            break
+                except CognigyError as e:
+                    last_error = e
+                    if e.status == 429:
+                        raise
+                    continue
+
+                if all_items:
+                    if not unlimited:
+                        all_items = all_items[:limit]
+                    all_items.sort(key=lambda x: x.get("timestamp", ""))
+                    return all_items
 
     if saw_successful_response:
         return []
