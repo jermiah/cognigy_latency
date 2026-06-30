@@ -36,13 +36,14 @@ the last output segment for that same trace.
 
 ## Filters
 
-The dashboard can load project endpoints from Cognigy and sends date plus
-selected endpoint filters into the initial log request before pagination. This
-keeps large historical reports from fetching unnecessary logs. After the
-filtered log set is loaded, the remaining report filters are applied locally.
+The dashboard can load project endpoints from Cognigy and sends the selected
+endpoint into the initial log request before pagination. Date filters are
+applied locally after raw logs are loaded, because the Cognigy Logs API may
+ignore date query params on some tenants. After the log set is loaded, the
+remaining report filters are applied locally.
 Available filters:
 
-- Date from / date to — sent to Cognigy before logs are fetched
+- Date from / date to — applied locally after raw logs are fetched
 - Cognigy endpoint — loaded from Cognigy and sent before logs are fetched
 - Endpoint text search — local search inside the loaded report
 - Session ID search

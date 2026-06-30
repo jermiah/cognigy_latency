@@ -323,6 +323,8 @@ def _fetch_recent_logs_without_dates(
 ) -> list:
     """Fallback to the original CLI strategy: paginate recent logs without date params."""
     page_size = 25
+    last_error = None
+    saw_successful_response = False
     for _, endpoint_style, endpoint_value in _filter_variants("", "", endpoint_id):
         url_candidates = [
             ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
@@ -336,14 +338,20 @@ def _fetch_recent_logs_without_dates(
             for _, start_url, start_params in url_candidates:
                 try:
                     first_data = _request_json(start_url, headers, start_params)
+                    saw_successful_response = True
                     all_items = _collect_log_pages(first_data, headers, limit)
                 except CognigyError as e:
+                    last_error = e
                     if e.status == 429:
                         raise
                     continue
                 if all_items:
                     all_items.sort(key=lambda x: x.get("timestamp", ""))
                     return all_items
+    if saw_successful_response:
+        return []
+    if last_error:
+        raise last_error
     return []
 
 
@@ -358,6 +366,8 @@ def fetch_logs(
 ) -> list:
     """
     Fetch log entries from the Cognigy Logs API, paginating automatically.
+    Date filters are applied after logs are loaded because Cognigy log date
+    query params can be ignored on some tenants.
     limit == 0 means fetch everything. Raises CognigyError on any failure.
     """
     base_url = _clean_base_url(base_url)
@@ -369,56 +379,9 @@ def fetch_logs(
     if not project_id:
         raise CognigyError("Project ID is required.")
 
-    page_size = 25
-    last_error = None
-    saw_successful_response = False
-    ignored_date_candidate = None
-
-    for date_style, endpoint_style, endpoint_value in _filter_variants(date_from, date_to, endpoint_id):
-        url_candidates = [
-            ("classic", f"{base_url}/v2.0/projects/{project_id}/logs", _with_filters(
-                {"limit": page_size}, date_from, date_to, endpoint_value, date_style, endpoint_style or "endpointId",
-            )),
-            ("nice", f"{base_url}/new/v2.0/logs", _with_filters(
-                {"limit": page_size, "projectId": project_id}, date_from, date_to, endpoint_value, date_style, endpoint_style or "endpointId",
-            )),
-        ]
-
-        for _, headers in _auth_candidates(api_key):
-            for _, start_url, start_params in url_candidates:
-                try:
-                    first_data = _request_json(start_url, headers, start_params)
-                    saw_successful_response = True
-                    first_items = _extract_items(first_data)
-                    if first_items and not _items_overlap_date_filter(first_items, date_from, date_to):
-                        if ignored_date_candidate is None:
-                            ignored_date_candidate = (headers, first_data)
-                        continue
-
-                    all_items = _collect_log_pages(first_data, headers, limit)
-                except CognigyError as e:
-                    last_error = e
-                    if e.status == 429:
-                        raise
-                    continue
-
-                if all_items:
-                    all_items.sort(key=lambda x: x.get("timestamp", ""))
-                    return all_items
-
-    if saw_successful_response:
-        if date_from or date_to:
-            recent_items = _fetch_recent_logs_without_dates(base_url, api_key, project_id, limit, endpoint_id)
-            if recent_items:
-                return recent_items
-        if ignored_date_candidate:
-            headers, first_data = ignored_date_candidate
-            ignored_date_items = _collect_log_pages(first_data, headers, limit)
-            ignored_date_items.sort(key=lambda x: x.get("timestamp", ""))
-            return ignored_date_items
-        return []
-
-    if last_error:
+    try:
+        return _fetch_recent_logs_without_dates(base_url, api_key, project_id, limit, endpoint_id)
+    except CognigyError as last_error:
         if last_error.status == 401:
             raise CognigyError(
                 "Authentication failed (401). Tried X-API-Key and Authorization "
@@ -427,8 +390,6 @@ def fetch_logs(
                 401,
             )
         raise last_error
-
-    return []
 
 
 # ── Filtering, grouping, latency ──────────────────────────────────────────────
@@ -602,9 +563,9 @@ def diagnostics(items: list, all_turns: list, filters: dict, limit=None) -> str:
                 break
             if not has_requested_turn:
                 parts.append(
-                    "The fetched logs are outside the requested date range, so "
-                    "Cognigy likely ignored that date-filter style and returned "
-                    "recent logs instead."
+                    "The loaded raw-log window is outside the requested date "
+                    "range. Increase Log entries to fetch or choose All "
+                    "(slowest) so the local date filter has older logs to use."
                 )
     active = []
     for label, key in (

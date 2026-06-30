@@ -199,17 +199,17 @@
             <option value="20000">20000 raw logs</option>
             <option value="0">All (slowest)</option>
           </select>
-          <span class="hint">Most recent matching Cognigy raw logs after date/endpoint filters. Example: 10000 means the latest 10000 matching raw logs, not 10000 latency turns.</span>
+          <span class="hint">Most recent Cognigy raw logs after endpoint filtering. Date filters are applied locally after logs load.</span>
         </div>
         <div class="field">
           <label for="date_from">Date from</label>
           <input id="date_from" name="date_from" type="date">
-          <span class="hint">Sent to Cognigy before logs are fetched.</span>
+          <span class="hint">Applied after raw logs are fetched.</span>
         </div>
         <div class="field">
           <label for="date_to">Date to</label>
           <input id="date_to" name="date_to" type="date">
-          <span class="hint">Inclusive end date, sent to Cognigy.</span>
+          <span class="hint">Inclusive end date, applied locally after fetch.</span>
         </div>
         <div class="field full">
           <label for="endpoint_id">Cognigy endpoint</label>
