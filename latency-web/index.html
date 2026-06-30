@@ -38,6 +38,21 @@
   }
   .field input:focus, .field select:focus { outline: none; border-color: var(--text-3); background: #fff; }
   .field .hint { font-size: 10px; color: var(--text-3); }
+  .label-row { display: flex; align-items: center; gap: 6px; }
+  .info-tip {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border: 1px solid var(--text-3); border-radius: 50%;
+    color: var(--text-2); font-family: var(--mono); font-size: 10px; line-height: 1; cursor: help;
+    text-transform: none; letter-spacing: 0;
+  }
+  .info-tip .tip {
+    position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%);
+    width: min(320px, 80vw); padding: 8px 10px; border-radius: var(--rad);
+    background: var(--text); color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    font-family: var(--sans); font-size: 11px; line-height: 1.4; text-transform: none; letter-spacing: 0;
+    opacity: 0; visibility: hidden; pointer-events: none; z-index: 20;
+  }
+  .info-tip:hover .tip, .info-tip:focus .tip { opacity: 1; visibility: visible; }
   .tag-input {
     min-height: 38px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
     padding: 5px 7px; border: 1px solid var(--border); border-radius: var(--rad);
@@ -189,7 +204,12 @@
           <label for="remember_api_key">Remember API key on this browser</label>
         </div>
         <div class="field">
-          <label for="limit">Log entries to fetch</label>
+          <div class="label-row">
+            <label for="limit">Log entries to fetch</label>
+            <span class="info-tip" tabindex="0" aria-label="Logs retention information">i
+              <span class="tip">Cognigy Logs API exposes only the most recent 24 hours by default. Longer log history needs an additional retention solution and implementation approval. Contact Lucia for a longer retention period for logs.</span>
+            </span>
+          </div>
           <select id="limit" name="limit">
             <option value="500">500 raw logs (fast)</option>
             <option value="2000" selected>2000 raw logs (default)</option>
@@ -199,17 +219,7 @@
             <option value="20000">20000 raw logs</option>
             <option value="0">All (slowest)</option>
           </select>
-          <span class="hint">Most recent Cognigy raw logs after endpoint filtering. Date filters are applied locally after logs load.</span>
-        </div>
-        <div class="field">
-          <label for="date_from">Date from</label>
-          <input id="date_from" name="date_from" type="date">
-          <span class="hint">Applied after raw logs are fetched.</span>
-        </div>
-        <div class="field">
-          <label for="date_to">Date to</label>
-          <input id="date_to" name="date_to" type="date">
-          <span class="hint">Inclusive end date, applied locally after fetch.</span>
+          <span class="hint">Latency reports can analyze only the raw logs currently available from Cognigy, normally the last 24 hours.</span>
         </div>
         <div class="field full">
           <label for="endpoint_id">Cognigy endpoint</label>
@@ -299,7 +309,7 @@ const STORAGE_KEY = 'vg2LatencyForm.v1';
 let SESSION_IDS = [];
 
 restoreForm();
-for (const id of ['name','base_url','project_id','api_key','remember_api_key','limit','date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
+for (const id of ['name','base_url','project_id','api_key','remember_api_key','limit','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
   document.getElementById(id).addEventListener('input', saveForm);
   document.getElementById(id).addEventListener('change', saveForm);
 }
@@ -348,8 +358,6 @@ form.addEventListener('submit', async (e) => {
     project_id: document.getElementById('project_id').value,
     api_key:    document.getElementById('api_key').value,
     limit:      parseInt(document.getElementById('limit').value, 10),
-    date_from:  document.getElementById('date_from').value,
-    date_to:    document.getElementById('date_to').value,
     endpoint_id: endpointSelect.value,
     endpoint_label: endpointSelect.value ? endpointSelect.selectedOptions[0]?.textContent || '' : '',
   };
@@ -385,7 +393,7 @@ form.addEventListener('submit', async (e) => {
 
 loadEndpointsBtn.addEventListener('click', loadEndpoints);
 
-for (const id of ['date_from','date_to','endpoint_id','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
+for (const id of ['endpoint_id','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms','show_all_turns']) {
   document.getElementById(id).addEventListener('input', applyFilters);
   document.getElementById(id).addEventListener('change', applyFilters);
 }
@@ -441,8 +449,6 @@ function saveForm() {
     base_url: document.getElementById('base_url').value,
     project_id: document.getElementById('project_id').value,
     limit: document.getElementById('limit').value,
-    date_from: document.getElementById('date_from').value,
-    date_to: document.getElementById('date_to').value,
     endpoint: document.getElementById('endpoint').value,
     endpoint_id: endpointSelect.value,
     endpoint_options: Array.from(endpointSelect.options).map(o => ({value: o.value, text: o.textContent})),
@@ -463,7 +469,7 @@ function saveForm() {
 function restoreForm() {
   try {
     const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    for (const id of ['name','base_url','project_id','limit','date_from','date_to','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms']) {
+    for (const id of ['name','base_url','project_id','limit','endpoint','session_id','trace_id','text','tier','min_latency_ms','max_latency_ms']) {
       if (data[id] !== undefined) document.getElementById(id).value = data[id];
     }
     document.getElementById('show_all_turns').checked = !!data.show_all_turns;
@@ -493,8 +499,6 @@ function tierLabel(tier) {
 function filterSettings() {
   const sessionIds = activeSessionQueries();
   return {
-    date_from: document.getElementById('date_from').value,
-    date_to: document.getElementById('date_to').value,
     endpoint_id: endpointSelect.value.trim().toLowerCase(),
     endpoint: document.getElementById('endpoint').value.trim().toLowerCase(),
     session_id: sessionIds.join(', '),
@@ -509,9 +513,6 @@ function filterSettings() {
 }
 
 function turnMatches(t, s, F) {
-  const day = (t.inbound_time || '').slice(0, 10);
-  if (F.date_from && day && day < F.date_from) return false;
-  if (F.date_to && day && day > F.date_to) return false;
   if (F.session_ids?.length && !F.session_ids.some(q => String(s.session_id || '').toLowerCase().includes(q))) return false;
   if (F.trace_id && !String(t.trace_id || '').toLowerCase().includes(F.trace_id)) return false;
   const endpointBlob = [t.endpoint_id, t.endpoint_name, t.trace_id].join(' ').toLowerCase();
